@@ -18,7 +18,14 @@ interface DraftRow {
   phone: string | null;
   confidence: number | null;
   enrichmentStatus: string | null;
-  matchAuditJson: { status?: string } | null;
+  matchAuditJson: {
+    status?: string;
+    parsedResult?: {
+      currentRole?: string | null;
+      currentCity?: string | null;
+      biography?: string | null;
+    } | null;
+  } | null;
   updatedAt: string;
 }
 
@@ -250,6 +257,9 @@ export default function SubmissionDetailPage() {
               <th className="pb-2 pr-3 font-medium">Status</th>
               <th className="pb-2 pr-3 font-medium text-center">Email</th>
               <th className="pb-2 pr-3 font-medium text-center">Phone</th>
+              <th className="pb-2 pr-3 font-medium text-center">Role</th>
+              <th className="pb-2 pr-3 font-medium text-center">City</th>
+              <th className="pb-2 pr-3 font-medium text-center">Bio</th>
               <th className="pb-2 pr-3 font-medium text-center">Conf.</th>
               <th className="pb-2 pr-3 font-medium">Last Run</th>
               <th className="pb-2 font-medium">Actions</th>
@@ -290,6 +300,25 @@ export default function SubmissionDetailPage() {
                     ) : (
                       <span className="text-gray-300">—</span>
                     )}
+                  </td>
+                  <td className="py-2 pr-3 text-center">
+                    {row.matchAuditJson?.parsedResult?.currentRole ? (
+                      <span className="text-green-600">✓</span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 text-center">
+                    {row.matchAuditJson?.parsedResult?.currentCity ? (
+                      <span className="text-green-600">✓</span>
+                    ) : (
+                      <span className="text-gray-300">—</span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-3 text-center text-gray-500">
+                    {row.matchAuditJson?.parsedResult?.biography
+                      ? row.matchAuditJson.parsedResult.biography.length
+                      : <span className="text-gray-300">—</span>}
                   </td>
                   <td className="py-2 pr-3 text-center text-gray-500">
                     {row.confidence != null
