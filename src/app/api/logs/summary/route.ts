@@ -18,7 +18,7 @@ export async function GET(req: Request) {
     _sum: { totalTokens: true, promptTokens: true, outputTokens: true, costUsd: true, latencyMs: true },
   });
 
-  const summary = rows.map((r) => ({
+  const summary = rows.map((r: (typeof rows)[number]) => ({
     apiType: r.apiType,
     calls: r._count.id,
     totalTokens: r._sum.totalTokens,
