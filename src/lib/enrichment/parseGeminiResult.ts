@@ -25,6 +25,8 @@ export function parseGeminiResult(rawText: string): ParsedEnrichmentResult {
     biography: typeof obj.biography === "string" ? obj.biography : undefined,
     email: typeof obj.email === "string" ? obj.email : null,
     phone: typeof obj.phone === "string" ? obj.phone : null,
+    currentRole: typeof obj.currentRole === "string" ? obj.currentRole : null,
+    currentCity: typeof obj.currentCity === "string" ? obj.currentCity : null,
     sourceUrls: Array.isArray(obj.sourceUrls)
       ? (obj.sourceUrls as string[]).filter((u) => typeof u === "string")
       : [],

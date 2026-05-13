@@ -94,9 +94,11 @@ SEARCH RESULTS:
 ${sourcesText || "No search results available."}
 
 INSTRUCTIONS:
-- Write a short biography (2-4 sentences) summarizing who this candidate is based on the search results.
+- Write a biography of approximately 600 words summarizing who this candidate is based on the search results. Cover their background, professional experience, community involvement, policy positions if known, and why they are running.
 - Extract an email address ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer email addresses.
 - Extract a phone number ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer phone numbers.
+- Extract their current professional role or occupation (e.g. "Attorney", "Small business owner", "Retired teacher"). This should be their professional identity, NOT the election they are running in. If sources indicate they currently hold this office (i.e. they are an incumbent), use "Incumbent [position title]". If no professional role is found at all, use "Candidate for [position title]".
+- Extract the city where they currently live or work. Null if not found.
 - List the URLs from search results that were most relevant.
 - Rate your confidence from 0.0 to 1.0 that this is the correct candidate (not a different person with the same name).
 - Add brief notes about ambiguity, alternative candidates found, or anything unusual.
@@ -106,6 +108,8 @@ Respond with ONLY valid JSON in this exact format:
   "biography": "string or null",
   "email": "string or null",
   "phone": "string or null",
+  "currentRole": "string or null",
+  "currentCity": "string or null",
   "sourceUrls": ["url1", "url2"],
   "confidence": 0.0,
   "notes": "string or null"

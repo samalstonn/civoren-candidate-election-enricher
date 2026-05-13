@@ -14,6 +14,8 @@ export interface ParsedEnrichmentResult {
   biography?: string;
   email?: string | null;
   phone?: string | null;
+  currentRole?: string | null;
+  currentCity?: string | null;
   sourceUrls?: string[];
   confidence?: number;
   notes?: string;

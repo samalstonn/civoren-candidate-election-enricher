@@ -7,6 +7,11 @@ export async function saveEnrichmentResult(
   parsed: ParsedEnrichmentResult,
   auditJson: MatchAuditJson
 ): Promise<void> {
+  const row = await prisma.crmIntakeDraftRow.findUnique({
+    where: { id: rowId },
+    select: { state: true, rawData: true, position: true },
+  });
+
   const finalSavedFields: Record<string, unknown> = {};
 
   if (parsed.email) finalSavedFields.email = parsed.email;
@@ -18,6 +23,26 @@ export async function saveEnrichmentResult(
       .filter(Boolean)
       .join("\n\n");
   }
+
+  const currentRoleFallback = row?.position ? `Candidate for ${row.position}` : null;
+  const currentRole = parsed.currentRole || currentRoleFallback;
+
+  const profileEnrichment = {
+    bio: parsed.biography || null,
+    currentRole,
+    currentCity: parsed.currentCity || null,
+    currentState: row?.state || null,
+    confidence: parsed.confidence ?? null,
+    sources: parsed.sourceUrls || [],
+    model: "gemini",
+    enrichedAt: new Date().toISOString(),
+  };
+
+  const existingRaw =
+    row?.rawData && typeof row.rawData === "object" && !Array.isArray(row.rawData)
+      ? (row.rawData as Record<string, unknown>)
+      : {};
+  const newRawData = { ...existingRaw, _profileEnrichment: profileEnrichment };
 
   const completedAudit: MatchAuditJson = {
     ...auditJson,
@@ -37,6 +62,7 @@ export async function saveEnrichmentResult(
       ...(finalSavedFields.reviewerNotes
         ? { reviewerNotes: finalSavedFields.reviewerNotes as string }
         : {}),
+      rawData: newRawData as unknown as Prisma.InputJsonValue,
       enrichmentStatus: "result_saved",
       matchAuditJson: completedAudit as unknown as Prisma.InputJsonValue,
     },
