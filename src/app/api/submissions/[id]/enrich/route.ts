@@ -57,7 +57,7 @@ export async function POST(
     select: { id: true, enrichmentStatus: true, matchAuditJson: true },
   });
 
-  const rows = allEligible.filter((row) => {
+  const rows = allEligible.filter((row: (typeof allEligible)[number]) => {
     const lastStatus = auditStatus(row.matchAuditJson);
     switch (target) {
       case "not_started":
