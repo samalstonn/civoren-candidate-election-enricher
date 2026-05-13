@@ -1,0 +1,1730 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DATABASE_URL_UNPOOLED")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+}
+
+model Election {
+  id                   Int                      @id @default(autoincrement())
+  position             String
+  date                 DateTime
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
+  active               Boolean
+  city                 String
+  description          String
+  positions            Int
+  state                String
+  type                 ElectionType
+  hidden               Boolean                  @default(false)
+  called               Boolean                  @default(false)
+  uploadedBy           String                   @default("team@elevracommunity.com")
+  filingAuthorityId    Int?
+  filingAuthorityKey   String?
+  filingAuthorityLevel CrmFilingAuthorityLevel?
+  filingAuthorityType  CrmFilingAuthorityType?
+  filingAuthorityName  String?
+  canonicalOfficeKey   String?
+  canonicalStateRoute  String?
+  canonicalCategory    String?
+  canonicalBranch      String?
+  officeSlug           String?
+  sourceType           CrmAuthoritySourceType   @default(MANUAL)
+  sourceConfidence     CrmSourceConfidence      @default(MEDIUM)
+  sourceCapturedAt     DateTime?
+  lastNormalizedAt     DateTime?
+  candidates           ElectionLink[]
+  aiChatThreads        CandidateAiChatThread[]
+  mapRegionLink        ElectionMapRegionLink?
+  filingAuthority      CrmCountyTracking?       @relation(fields: [filingAuthorityId], references: [id])
+
+  @@index([filingAuthorityId])
+  @@index([filingAuthorityKey, canonicalOfficeKey, date])
+  @@index([canonicalStateRoute, canonicalCategory, canonicalBranch, officeSlug])
+}
+
+model ElectionMapRegion {
+  id                Int                       @id @default(autoincrement())
+  stateCode         String
+  regionType        ElectionMapRegionType
+  regionCode        String
+  label             String
+  geometryKey       String?
+  sortOrder         Int?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  elections         ElectionMapRegionLink[]
+  childLinks        ElectionMapRegionMember[] @relation("ElectionMapRegionChildren")
+  parentLinks       ElectionMapRegionMember[] @relation("ElectionMapRegionParents")
+  intakeSubmissions CrmIntakeSubmission[]
+
+  @@unique([stateCode, regionType, regionCode])
+  @@index([stateCode, regionType, sortOrder])
+}
+
+model ElectionMapRegionLink {
+  id         Int               @id @default(autoincrement())
+  electionId Int               @unique
+  regionId   Int
+  createdAt  DateTime          @default(now())
+  updatedAt  DateTime          @updatedAt
+  election   Election          @relation(fields: [electionId], references: [id], onDelete: Cascade)
+  region     ElectionMapRegion @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@index([regionId])
+}
+
+model ElectionMapRegionMember {
+  id             Int               @id @default(autoincrement())
+  parentRegionId Int
+  childRegionId  Int
+  sortOrder      Int?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  parentRegion   ElectionMapRegion @relation("ElectionMapRegionChildren", fields: [parentRegionId], references: [id], onDelete: Cascade)
+  childRegion    ElectionMapRegion @relation("ElectionMapRegionParents", fields: [childRegionId], references: [id], onDelete: Cascade)
+
+  @@unique([parentRegionId, childRegionId])
+  @@index([childRegionId])
+}
+
+model Candidate {
+  name                   String
+  website                String?
+  signingLink            String?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+  linkedin               String?
+  twitter                String?
+  bluesky                String?
+  instagram              String?
+  facebook               String?
+  tiktok                 String?
+  photo                  String?
+  bio                    String?                   @default("")
+  clerkUserId            String?                   @unique
+  history                String[]
+  id                     Int                       @id @default(autoincrement())
+  status                 SubmissionStatus          @default(PENDING)
+  verified               Boolean                   @default(false)
+  photoUrl               String?
+  hasPhoto               Boolean                   @default(false)
+  hidden                 Boolean                   @default(false)
+  called                 Boolean                   @default(false) // excludes this candidate from certain functions, used for civoren team profiles
+  slug                   String                    @unique
+  donationCount          Int                       @default(0)
+  email                  String?
+  phone                  String?
+  currentRole            String?
+  currentState           String?
+  currentCity            String?
+  donationLink           String?
+  emailHistory           String[]                  @default([])
+  uploadedBy             String                    @default("team@elevracommunity.com")
+  inInstantly            Boolean                   @default(false)
+  instantlySyncedAt      DateTime?
+  instantlyLeadId        String?
+  instantlyCohortId      String?
+  instantlyAttemptedAt   DateTime?
+  instantlyAttemptReason InstantlyAttemptReason?
+  CandidateLink          CandidateLink[]
+  CandidatePost          CandidatePost[]
+  CandidateSocialAccount CandidateSocialAccount[]
+  profileViews           CandidateProfileView[]
+  CandidateSiteSettings  CandidateSiteSettings?
+  donations              Donation[]
+  elections              ElectionLink[]
+  followers              Follow[]
+  changeEvents           ChangeEvent[]
+  CreativeAsset          CreativeAsset[]
+  endorsements           Endorsement[]
+  Testimonial            Testimonial[]
+  Vendors                Vendor[]                  @relation("CandidateToVendor")
+  CandidateEmailLog      CandidateEmailLog[]
+  upgradeAttempts        CandidateUpgradeAttempt[]
+  accountUsers           CandidateAccountUser[]
+  aiChatThreads          CandidateAiChatThread[]
+  instantlyCohort        InstantlyCohort?          @relation(fields: [instantlyCohortId], references: [id], onDelete: SetNull)
+
+  @@index([inInstantly])
+  @@index([instantlyCohortId])
+  @@index([instantlyAttemptedAt])
+}
+
+model CandidateAccountUser {
+  id                   Int                        @id @default(autoincrement())
+  candidateId          Int
+  clerkUserId          String?                    @unique
+  invitedEmail         String
+  inviteToken          String                     @unique
+  role                 CandidateAccountRole       @default(EDITOR)
+  status               CandidateAccountUserStatus @default(PENDING)
+  invitedByClerkUserId String
+  acceptedAt           DateTime?
+  revokedAt            DateTime?
+  createdAt            DateTime                   @default(now())
+  updatedAt            DateTime                   @updatedAt
+  candidate            Candidate                  @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, invitedEmail])
+  @@index([candidateId, status])
+  @@index([invitedEmail, status])
+}
+
+model CandidateUpgradeAttempt {
+  id                      Int       @id @default(autoincrement())
+  candidateId             Int
+  clerkUserId             String
+  plan                    String
+  paymentLinkVariant      String
+  status                  String    @default("INITIATED")
+  clientReferenceId       String    @unique
+  tokenNonce              String
+  trialEligible           Boolean   @default(false)
+  stripeCheckoutSessionId String?   @unique
+  stripeCustomerId        String?
+  stripeSubscriptionId    String?
+  emailNotificationSentAt DateTime?
+  paidAt                  DateTime?
+  reconciledAt            DateTime?
+  failedAt                DateTime?
+  failureReason           String?
+  stripeEventId           String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  candidate               Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, createdAt])
+  @@index([clerkUserId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Donation {
+  id                    Int              @id @default(autoincrement())
+  amount                Decimal          @db.Decimal(10, 2)
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  donorName             String
+  donorEmail            String
+  donorAddress          String
+  donorCity             String
+  donorState            String
+  donorZip              String
+  donorPhone            String?
+  isRetiredOrUnemployed Boolean          @default(false)
+  occupation            String?
+  employer              String?
+  transactionId         String?          @unique
+  processingFee         Decimal?         @db.Decimal(10, 2)
+  coverFee              Boolean          @default(false)
+  candidateId           Int
+  clerkUserId           String?
+  paidAt                DateTime?
+  status                SubmissionStatus @default(PENDING)
+  candidate             Candidate        @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model CandidateLink {
+  id          Int               @id @default(autoincrement())
+  candidateId Int
+  type        CandidateLinkType @default(WEBSITE)
+  label       String
+  url         String
+  sortOrder   Int               @default(0)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @default(now())
+  Candidate   Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, sortOrder])
+}
+
+model CandidatePost {
+  id                   Int                    @id @default(autoincrement())
+  candidateId          Int
+  title                String
+  excerpt              String?
+  body                 String
+  kind                 CandidatePostKind      @default(NATIVE)
+  status               CandidatePostStatus    @default(DRAFT)
+  socialPlatform       CandidatePostPlatform?
+  externalPostUrl      String?
+  externalPostId       String?
+  externalPostRecordId Int?                   @unique
+  published            Boolean                @default(false)
+  pinned               Boolean                @default(false)
+  createdAt            DateTime               @default(now())
+  updatedAt            DateTime               @default(now())
+  publishedAt          DateTime?
+  assets               CandidatePostAsset[]
+  externalPost         ExternalPost?          @relation(fields: [externalPostRecordId], references: [id], onDelete: SetNull)
+  Candidate            Candidate              @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, published, publishedAt])
+}
+
+model ExternalPost {
+  id              Int                    @id @default(autoincrement())
+  platform        CandidatePostPlatform
+  originalUrl     String
+  externalId      String
+  authorHandle    String?
+  body            String?
+  mediaPreviewUrl String?
+  publishedAt     DateTime?
+  embedHtml       String?
+  renderMode      ExternalPostRenderMode @default(NORMALIZED)
+  rawMetadataJson Json?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  CandidatePost   CandidatePost?
+}
+
+model CandidatePostAsset {
+  id              Int                    @id @default(autoincrement())
+  candidatePostId Int
+  kind            CandidatePostAssetKind
+  url             String
+  storageKey      String?
+  width           Int?
+  height          Int?
+  sortOrder       Int                    @default(0)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  candidatePost   CandidatePost          @relation(fields: [candidatePostId], references: [id], onDelete: Cascade)
+
+  @@index([candidatePostId, sortOrder])
+}
+
+model CandidateSocialAccount {
+  id                Int                          @id @default(autoincrement())
+  candidateId       Int
+  platform          CandidatePostPlatform
+  status            CandidateSocialAccountStatus @default(DISCONNECTED)
+  handle            String?
+  accountLabel      String?
+  externalAccountId String?
+  accessToken       String?
+  refreshToken      String?
+  tokenExpiresAt    DateTime?
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime                     @updatedAt
+  candidate         Candidate                    @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, platform])
+  @@index([candidateId, status])
+}
+
+model CandidateSiteSettings {
+  id                Int       @id @default(autoincrement())
+  candidateId       Int       @unique
+  themePreset       String    @default("civic-spark")
+  accentColor       String    @default("#0f766e")
+  surfaceColor      String    @default("#fffaf2")
+  headlineFont      String    @default("Fraunces")
+  bodyFont          String    @default("Manrope")
+  heroLabel         String?
+  heroHeadline      String?
+  heroSubheadline   String?
+  heroImageUrl      String?
+  primaryCtaLabel   String?
+  primaryCtaUrl     String?
+  secondaryCtaLabel String?
+  secondaryCtaUrl   String?
+  navItems          String[]  @default(["home", "profile", "campaign", "endorsements", "updates", "donate", "contact"])
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @default(now())
+  Candidate         Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model CreativeAsset {
+  id            Int                 @id @default(autoincrement())
+  candidateId   Int
+  type          CreativeAssetType
+  prompt        String
+  revisedPrompt String?
+  status        CreativeAssetStatus @default(QUEUED)
+  provider      String              @default("gemini-imagen")
+  imageUrl      String?
+  blobKey       String?
+  width         Int?
+  height        Int?
+  metadata      Json?
+  error         String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @default(now())
+  Candidate     Candidate           @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, createdAt])
+  @@index([candidateId, status])
+}
+
+model LocalPulseItem {
+  id         Int              @id @default(autoincrement())
+  title      String
+  summary    String
+  url        String?
+  sourceName String
+  city       String?
+  state      String?
+  tag        String?
+  imageUrl   String?
+  kind       LocalPulseKind
+  status     LocalPulseStatus @default(DRAFT)
+  startsAt   DateTime?
+  endsAt     DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @default(now())
+
+  @@index([kind, startsAt])
+  @@index([status, state, city])
+}
+
+model UserValidationRequest {
+  id             Int              @id @default(autoincrement())
+  fullName       String
+  email          String
+  phone          String?
+  position       String
+  website        String?
+  linkedin       String?
+  twitter        String?
+  additionalInfo String?
+  city           String?
+  state          String?
+  candidateId    Int
+  clerkUserId    String           @unique
+  electionId     Int
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+  status         SubmissionStatus @default(PENDING)
+}
+
+model ElectionSubmission {
+  id          Int              @id @default(autoincrement())
+  position    String
+  date        DateTime
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  city        String
+  state       String
+  description String
+  positions   Int
+  type        ElectionType
+  status      SubmissionStatus @default(PENDING)
+  clerkUserId String?
+  notes       String?
+}
+
+model CandidateSubmission {
+  id              Int              @id @default(autoincrement())
+  name            String
+  party           String
+  policies        String[]
+  website         String?
+  electionId      Int?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  additionalNotes String?
+  city            String
+  linkedin        String?
+  photo           String?
+  position        String
+  state           String
+  bio             String
+  clerkUserId     String?
+  status          SubmissionStatus @default(PENDING)
+  notes           String?
+}
+
+model Vendor {
+  id                Int               @id @default(autoincrement())
+  name              String
+  bio               String
+  website           String?
+  email             String
+  phone             String?
+  city              String
+  state             String
+  subscription      VendorTier        @default(FREE)
+  clerkUserId       String            @unique
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  status            SubmissionStatus  @default(PENDING)
+  verified          Boolean           @default(false)
+  latitude          Float?
+  longitude         Float?
+  photoUrl          String?
+  slug              String            @unique
+  hidden            Boolean           @default(false)
+  portfolio         PortfolioItem[]
+  testimonials      Testimonial[]
+  candidate         Candidate[]       @relation("CandidateToVendor")
+  serviceCategories ServiceCategory[] @relation("VendorServices")
+}
+
+model ServiceCategory {
+  id          Int                 @id @default(autoincrement())
+  name        String              @unique
+  type        ServiceCategoryType @unique
+  description String?
+  vendors     Vendor[]            @relation("VendorServices")
+}
+
+model PortfolioItem {
+  id          Int     @id @default(autoincrement())
+  vendorId    Int
+  title       String
+  imageUrl    String
+  description String?
+  vendor      Vendor  @relation(fields: [vendorId], references: [id])
+}
+
+model Testimonial {
+  id          Int       @id @default(autoincrement())
+  vendorId    Int
+  candidateId Int
+  content     String
+  rating      Int
+  createdAt   DateTime  @default(now())
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  vendor      Vendor    @relation(fields: [vendorId], references: [id])
+}
+
+model CandidateProfileView {
+  id          Int       @id @default(autoincrement())
+  candidateId Int
+  viewedAt    DateTime  @default(now())
+  viewerIp    String?
+  userAgent   String?
+  referrerUrl String?
+  Candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model Voter {
+  id            Int              @id @default(autoincrement())
+  clerkUserId   String           @unique
+  email         String
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+  follows       Follow[]
+  notifications Notification[]
+  preferences   VoterPreference?
+}
+
+model Follow {
+  voterId     Int
+  candidateId Int
+  createdAt   DateTime  @default(now())
+  voter       Voter     @relation(fields: [voterId], references: [id], onDelete: Cascade)
+  candidate   Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@id([voterId, candidateId])
+}
+
+model ChangeEvent {
+  id            Int             @id @default(autoincrement())
+  candidateId   Int
+  type          ChangeEventType
+  metadata      Json?
+  createdAt     DateTime        @default(now())
+  candidate     Candidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  notifications Notification[]
+}
+
+model Notification {
+  id            Int                @id @default(autoincrement())
+  voterId       Int
+  changeEventId Int
+  type          NotificationType
+  status        NotificationStatus @default(UNREAD)
+  payload       Json?
+  createdAt     DateTime           @default(now())
+  readAt        DateTime?
+  voter         Voter              @relation(fields: [voterId], references: [id], onDelete: Cascade)
+  changeEvent   ChangeEvent        @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+}
+
+model VoterPreference {
+  id               Int       @id @default(autoincrement())
+  voterId          Int       @unique
+  emailMode        EmailMode @default(IMMEDIATE)
+  notifyBio        Boolean   @default(true)
+  notifyEducation  Boolean   @default(true)
+  notifyPhoto      Boolean   @default(true)
+  notifyCampaign   Boolean   @default(true)
+  dailyDigestHour  Int?
+  lastDigestSentAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  voter            Voter     @relation(fields: [voterId], references: [id], onDelete: Cascade)
+}
+
+model Endorsement {
+  id                      Int       @id @default(autoincrement())
+  candidateId             Int
+  endorserName            String
+  relationshipDescription String?
+  content                 String
+  photoUrl                String?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+  clerkUserId             String
+  hidden                  Boolean   @default(false)
+  candidate               Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model Photo {
+  id         Int      @id @default(autoincrement())
+  key        String   @unique
+  url        String
+  uploadedBy String
+  createdAt  DateTime @default(now())
+}
+
+model BlogPost {
+  id          Int        @id @default(autoincrement())
+  title       String
+  slug        String     @unique
+  authorName  String
+  excerpt     String?
+  coverImage  String?
+  contentMd   String
+  tags        String[]   @default([])
+  status      BlogStatus @default(DRAFT)
+  publishedAt DateTime?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model ElectionLink {
+  candidateId     Int
+  electionId      Int
+  joinedAt        DateTime       @default(now())
+  additionalNotes String?
+  party           String
+  photoUrl        String?
+  policies        String[]       @default([])
+  sources         String[]       @default([])
+  votinglink      String?
+  archived        Boolean        @default(false)
+  ContentBlock    ContentBlock[]
+  Document        Document?
+  candidate       Candidate      @relation(fields: [candidateId], references: [id])
+  election        Election       @relation(fields: [electionId], references: [id])
+
+  @@id([candidateId, electionId])
+}
+
+model CandidateAiChatThread {
+  id            String                   @id @default(cuid())
+  candidateId   Int
+  userClerkId   String
+  electionId    Int?
+  title         String
+  lastMessageAt DateTime                 @default(now())
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  candidate     Candidate                @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  election      Election?                @relation(fields: [electionId], references: [id], onDelete: SetNull)
+  messages      CandidateAiChatMessage[]
+
+  @@index([candidateId, userClerkId, updatedAt])
+  @@index([candidateId, userClerkId, lastMessageAt])
+  @@index([userClerkId, updatedAt])
+}
+
+model CandidateAiChatMessage {
+  id           String                @id @default(cuid())
+  threadId     String
+  role         String
+  content      String
+  model        String?
+  promptTokens Int?
+  outputTokens Int?
+  totalTokens  Int?
+  sequence     Int
+  createdAt    DateTime              @default(now())
+  thread       CandidateAiChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, sequence])
+}
+
+model ContentBlock {
+  id           Int          @id @default(autoincrement())
+  candidateId  Int
+  electionId   Int
+  order        Int
+  type         BlockType
+  color        TextColor?
+  level        Int?
+  text         String?
+  body         String?
+  listStyle    ListStyle?
+  items        String[]
+  imageUrl     String?
+  caption      String?
+  videoUrl     String?
+  thumbnailUrl String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  electionLink ElectionLink @relation(fields: [candidateId, electionId], references: [candidateId, electionId], onDelete: Cascade)
+
+  @@unique([candidateId, electionId, order])
+}
+
+model SpreadsheetUpload {
+  id                String                  @id @default(cuid())
+  status            SpreadsheetUploadStatus @default(QUEUED)
+  failureReason     String?
+  originalFilename  String
+  uploaderEmail     String
+  summaryJson       Json?
+  resultWorkbookUrl String?
+  forceHidden       Boolean                 @default(true)
+  queuedAt          DateTime                @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime                @default(now())
+  updatedAt         DateTime                @updatedAt
+  jobs              GeminiJob[]             @relation("SpreadsheetUploadJobs")
+  batches           UploadElectionBatch[]
+  notifications     UploadNotificationLog[]
+  intakeSubmissions CrmIntakeSubmission[]
+
+  @@index([status, queuedAt])
+  @@index([createdAt])
+}
+
+model UploadElectionBatch {
+  id             String            @id @default(cuid())
+  uploadId       String
+  groupKey       String?
+  municipality   String?
+  state          String?
+  position       String?
+  rawRows        Json
+  analysisJson   Json?
+  structuredJson Json?
+  status         UploadBatchStatus @default(QUEUED)
+  errorReason    String?
+  analyzeJobId   String?
+  structureJobId String?
+  insertJobId    String?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  jobs           GeminiJob[]       @relation("BatchJobs")
+  upload         SpreadsheetUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@index([uploadId])
+  @@index([status])
+}
+
+model GeminiJob {
+  id                      String               @id @default(cuid())
+  uploadId                String?
+  batchId                 String?
+  type                    GeminiJobType
+  status                  GeminiJobStatus      @default(PENDING)
+  priority                Int                  @default(0)
+  dependencyJobId         String?
+  preferredModels         Json
+  fallbackModels          Json?
+  nextRunAt               DateTime             @default(now())
+  retryCount              Int                  @default(0)
+  maxRetries              Int                  @default(5)
+  lastError               String?
+  startedAt               DateTime?
+  completedAt             DateTime?
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
+  estimatedRequestTokens  Int?
+  estimatedResponseTokens Int?
+  metadata                Json?
+  batch                   UploadElectionBatch? @relation("BatchJobs", fields: [batchId], references: [id], onDelete: Cascade)
+  upload                  SpreadsheetUpload?   @relation("SpreadsheetUploadJobs", fields: [uploadId], references: [id], onDelete: Cascade)
+  attempts                GeminiJobAttempt[]
+
+  @@index([status, nextRunAt])
+  @@index([type, status])
+  @@index([uploadId])
+  @@index([batchId])
+}
+
+model GeminiJobAttempt {
+  id              String                 @id @default(cuid())
+  jobId           String
+  modelUsed       String
+  startedAt       DateTime               @default(now())
+  completedAt     DateTime?
+  requestTokens   Int?
+  responseTokens  Int?
+  batchTokens     Int?
+  statusCode      Int?
+  responseBody    Json?
+  errorType       String?
+  errorMessage    String?
+  status          GeminiJobAttemptStatus @default(PENDING)
+  createdAt       DateTime               @default(now())
+  rateWindowStart DateTime?
+  isFallback      Boolean?               @default(false)
+  job             GeminiJob              @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+}
+
+model GeminiRateWindow {
+  id             String   @id @default(cuid())
+  model          String
+  windowStart    DateTime
+  requestCount   Int      @default(0)
+  requestTokens  Int      @default(0)
+  responseTokens Int      @default(0)
+  batchTokens    Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([model, windowStart])
+}
+
+model UploadNotificationLog {
+  id         String                   @id @default(cuid())
+  uploadId   String
+  email      String
+  type       UploadNotificationType
+  status     UploadNotificationStatus @default(QUEUED)
+  responseId String?
+  error      String?
+  metadata   Json?
+  sentAt     DateTime?
+  createdAt  DateTime                 @default(now())
+  updatedAt  DateTime                 @updatedAt
+  upload     SpreadsheetUpload        @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+
+  @@index([uploadId])
+  @@index([type])
+}
+
+model Document {
+  id            String       @id @default(cuid())
+  contentJson   Json
+  contentHtml   String
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  candidateSlug String
+  clerkUserId   String
+  candidateId   Int
+  electionId    Int
+  electionLink  ElectionLink @relation(fields: [candidateId, electionId], references: [candidateId, electionId], onDelete: Cascade)
+
+  @@unique([candidateId, electionId])
+}
+
+model EmailDocument {
+  id              String   @id @default(cuid())
+  key             String   @unique
+  title           String
+  subjectTemplate String
+  htmlTemplate    String
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model EmailUnsubscribe {
+  id        Int      @id @default(autoincrement())
+  email     String
+  scope     String
+  reason    String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@unique([email, scope], map: "EmailUnsubscribe_email_scope_key")
+  @@index([email], map: "EmailUnsubscribe_email_idx")
+}
+
+enum ElectionType {
+  LOCAL
+  STATE
+  NATIONAL
+  UNIVERSITY
+  TEST
+}
+
+enum VendorTier {
+  FREE
+  STANDARD
+  PREMIUM
+}
+
+enum SubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CandidateAccountRole {
+  OWNER
+  EDITOR
+}
+
+enum CandidateAccountUserStatus {
+  PENDING
+  ACTIVE
+  REVOKED
+}
+
+enum ServiceCategoryType {
+  CREATIVE_BRANDING
+  DIGITAL_TECH
+  PHYSICAL_MEDIA
+  CONSULTING_PR
+  OTHER
+}
+
+enum BlogStatus {
+  DRAFT
+  PUBLISHED
+}
+
+enum BlockType {
+  HEADING
+  TEXT
+  LIST
+  DIVIDER
+  IMAGE
+  VIDEO
+}
+
+enum ListStyle {
+  BULLET
+  NUMBER
+}
+
+enum TextColor {
+  BLACK
+  GRAY
+  PURPLE
+}
+
+enum SpreadsheetUploadStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  NEEDS_REUPLOAD
+  CANCELLED
+}
+
+enum UploadBatchStatus {
+  QUEUED
+  ANALYZING
+  STRUCTURING
+  INSERTING
+  COMPLETED
+  FAILED
+  NEEDS_REUPLOAD
+  SKIPPED
+}
+
+enum GeminiJobType {
+  ANALYZE
+  STRUCTURE
+  INSERT
+  WORKBOOK
+  NOTIFICATION
+}
+
+enum GeminiJobStatus {
+  PENDING
+  READY
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  CANCELLED
+  SKIPPED
+}
+
+enum GeminiJobAttemptStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum UploadNotificationType {
+  QUEUED
+  ANALYZE_COMPLETE
+  STRUCTURE_COMPLETE
+  INSERT_COMPLETE
+  FINAL
+  BATCH_FAILURE
+}
+
+enum UploadNotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum ChangeEventType {
+  BIO
+  EDUCATION
+  PHOTO
+  CAMPAIGN
+  POST
+}
+
+enum NotificationType {
+  CANDIDATE_UPDATE
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+}
+
+enum EmailMode {
+  IMMEDIATE
+  DAILY_DIGEST
+  OFF
+}
+
+// ==========================================
+// CRM Models
+// ==========================================
+
+enum CrmContactStatus {
+  NOT_CONTACTED
+  EMAILED
+  RESPONDED
+  CONVERTED
+  REJECTED
+  UNSUBSCRIBED
+}
+
+enum CrmCountyAcquisitionStatus {
+  NOT_STARTED
+  CLERK_EMAILED
+  NO_RESPONSE
+  PARTIAL_RECORDS
+  DATA_OBTAINED_OFFLINE
+  DATA_OBTAINED
+  NO_EMAIL_ONLINE
+  OTHER
+}
+
+enum CrmCoverageScope {
+  STATE
+  COUNTY
+}
+
+enum ElectionMapRegionType {
+  STATE
+  US_CONGRESSIONAL_DISTRICT
+  STATE_SENATE_DISTRICT
+  STATE_HOUSE_DISTRICT
+  BOARD_OF_EQUALIZATION_DISTRICT
+  COUNTY
+  COUNTY_DISTRICT
+  MUNICIPAL_DISTRICT
+  SCHOOL_DISTRICT
+  SCHOOL_DISTRICT_SUBAREA
+  MUNICIPALITY
+  JUDICIAL_CIRCUIT
+  JUDICIAL_COUNTY_GROUP
+}
+
+enum CrmFilingAuthorityLevel {
+  STATE
+  COUNTY
+  MUNICIPAL
+  DISTRICT
+  COURT
+  SPECIAL_DISTRICT
+  REFERRED_CONTACT
+  UNKNOWN
+}
+
+enum CrmFilingAuthorityType {
+  STATE_ELECTIONS
+  COUNTY_CLERK
+  CITY_CLERK
+  DISTRICT_OFFICE
+  COURT_OFFICE
+  SPECIAL_DISTRICT_OFFICE
+  REFERRED_CONTACT
+  OTHER
+}
+
+enum CrmAuthoritySourceType {
+  MANUAL
+  STAFF_UPLOAD
+  CLERK_EMAIL
+  PUBLIC_SPREADSHEET
+  DIRECT_REPLY
+  BACKFILL
+}
+
+enum CrmSourceConfidence {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum CrmOrgPartnershipTier {
+  PROSPECT
+  ACTIVE
+  PAUSED
+  FORMER
+}
+
+enum CrmEmailType {
+  CLERK_SPREADSHEET_REQUEST
+  CANDIDATE_INITIAL_OUTREACH
+  CANDIDATE_FOLLOWUP
+  CANDIDATE_CLAIM_REMINDER
+  ORG_INITIAL_INQUIRY
+  ORG_FOLLOWUP
+  SITE_CANDIDATE_INQUIRY
+  OTHER
+}
+
+enum CrmEmailDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum CrmIntakeSubmissionStatus {
+  RECEIVED
+  QUEUED
+  PARSING
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  FAILED
+}
+
+enum CrmIntakeSourceType {
+  CLERK_EMAIL
+  STAFF_UPLOAD
+}
+
+enum CrmIntakeRowStatus {
+  VALID
+  INCOMPLETE
+  DUPLICATE
+  DISCARDED
+  APPROVED
+}
+
+enum CrmIntakeReplyMode {
+  NONE
+  THANK_YOU_DRAFT
+  CLARIFY_DRAFT
+  MANUAL_REVIEW
+}
+
+enum CrmIntakePipelineMode {
+  QUEUE_EXTRACTION
+  HOLD_FOR_REVIEW
+  SKIP
+}
+
+enum CrmIntakeAttachmentType {
+  CSV
+  XLSX
+  PDF
+  IMAGE
+  TEXT
+}
+
+enum CrmIntakeJobOperation {
+  PARSE
+  NORMALIZE
+  ENRICH_PROFILES
+}
+
+enum CrmIntakeJobStatus {
+  QUEUED
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+}
+
+enum CrmBackfillSource {
+  RESEND_CSV
+  RESEND_API
+}
+
+enum CrmBackfillRunStatus {
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum CrmBackfillReviewStatus {
+  QUEUED
+  NEEDS_REVIEW
+  APPROVED
+  REJECTED
+  IGNORED
+  FAILED
+}
+
+enum CrmBackfillEntityType {
+  CLERK
+  CANDIDATE
+  OTHER
+  UNKNOWN
+}
+
+enum InstantlyAttemptReason {
+  MISSING_EMAIL
+}
+
+enum CandidateLinkType {
+  WEBSITE
+  DONATION
+  INSTAGRAM
+  FACEBOOK
+  LINKEDIN
+  X
+  YOUTUBE
+  TIKTOK
+  VOLUNTEER
+  CUSTOM
+}
+
+enum CandidatePostKind {
+  NATIVE
+  SOCIAL
+}
+
+enum CandidatePostStatus {
+  DRAFT
+  PUBLISHED
+  FAILED
+}
+
+enum CandidatePostAssetKind {
+  IMAGE
+  VIDEO
+}
+
+enum CandidatePostPlatform {
+  INSTAGRAM
+  TIKTOK
+  X
+}
+
+enum ExternalPostRenderMode {
+  NORMALIZED
+  FALLBACK_UNAVAILABLE
+  FALLBACK_PRIVATE
+  FALLBACK_DELETED
+}
+
+enum CandidateSocialAccountStatus {
+  DISCONNECTED
+  CONNECTING
+  CONNECTED
+  ERROR
+}
+
+enum CreativeAssetStatus {
+  QUEUED
+  GENERATED
+  FAILED
+}
+
+enum CreativeAssetType {
+  LAWN_SIGN
+  POSTER
+  SOCIAL_IMAGE
+  FLYER
+}
+
+enum LocalPulseKind {
+  NEWS
+  EVENT
+}
+
+enum LocalPulseStatus {
+  DRAFT
+  PUBLISHED
+}
+
+model CrmCountyTracking {
+  id                Int                        @id @default(autoincrement())
+  scope             CrmCoverageScope           @default(COUNTY)
+  state             String
+  county            String?
+  authorityLevel    CrmFilingAuthorityLevel    @default(COUNTY)
+  authorityType     CrmFilingAuthorityType     @default(COUNTY_CLERK)
+  authorityName     String?
+  normalizedName    String?
+  contactEmail      String?
+  coverageKey       String                     @unique
+  status            CrmCountyAcquisitionStatus @default(NOT_STARTED)
+  notes             String?                    @db.Text
+  sourceType        CrmAuthoritySourceType     @default(MANUAL)
+  sourceConfidence  CrmSourceConfidence        @default(MEDIUM)
+  sourceCapturedAt  DateTime?
+  lastNormalizedAt  DateTime?
+  currentSourceNote String?                    @db.Text
+  updatedAt         DateTime                   @updatedAt
+  aliases           CrmFilingAuthorityAlias[]
+  contacts          CountyClerk[]
+  crmCandidates     CrmCandidate[]
+  elections         Election[]
+
+  @@index([state, scope])
+  @@index([state, county, scope])
+  @@index([state, authorityLevel, authorityType])
+}
+
+model CountyClerk {
+  id                  Int                    @id @default(autoincrement())
+  firstName           String?
+  lastName            String?
+  email               String
+  county              String?
+  state               String
+  jurisdiction        String?
+  phone               String?
+  notes               String?                @db.Text
+  authorityTrackingId Int?
+  authorityName       String?
+  authorityAlias      String?
+  sourceType          CrmAuthoritySourceType @default(MANUAL)
+  sourceConfidence    CrmSourceConfidence    @default(MEDIUM)
+  sourceCapturedAt    DateTime?
+  lastNormalizedAt    DateTime?
+  status              CrmContactStatus       @default(NOT_CONTACTED)
+  needsFollowUp       Boolean                @default(false)
+  followUpDate        DateTime?
+  aiDraftResponse     String?                @db.Text
+  createdAt           DateTime               @default(now())
+  updatedAt           DateTime               @updatedAt
+  authorityTracking   CrmCountyTracking?     @relation(fields: [authorityTrackingId], references: [id])
+  emailLogs           CrmEmailLog[]
+  crmCandidates       CrmCandidate[]
+  intakeSubmissions   CrmIntakeSubmission[]
+
+  @@index([authorityTrackingId])
+}
+
+model CrmCandidate {
+  id                       Int                    @id @default(autoincrement())
+  firstName                String
+  lastName                 String
+  outreachEmail            String
+  signupEmail              String?
+  phone                    String?
+  county                   String?
+  state                    String?
+  position                 String?
+  municipality             String?
+  party                    String?
+  tag                      String?
+  manualSend               Boolean                @default(false)
+  notes                    String?                @db.Text
+  status                   CrmContactStatus       @default(NOT_CONTACTED)
+  needsFollowUp            Boolean                @default(false)
+  followUpDate             DateTime?
+  sourceClerkId            Int?
+  filingAuthorityId        Int?
+  sourceIntakeSubmissionId Int?
+  candidateId              Int?
+  candidateSlug            String?
+  canonicalCandidateKey    String?
+  sourceType               CrmAuthoritySourceType @default(MANUAL)
+  sourceConfidence         CrmSourceConfidence    @default(MEDIUM)
+  sourceCapturedAt         DateTime?
+  lastNormalizedAt         DateTime?
+  matchAuditJson           Json?
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+  sourceClerk              CountyClerk?           @relation(fields: [sourceClerkId], references: [id])
+  filingAuthority          CrmCountyTracking?     @relation(fields: [filingAuthorityId], references: [id])
+  sourceIntakeSubmission   CrmIntakeSubmission?   @relation("SubmissionPromotedCandidates", fields: [sourceIntakeSubmissionId], references: [id])
+  emailLogs                CrmEmailLog[]
+
+  @@index([filingAuthorityId])
+  @@index([canonicalCandidateKey])
+}
+
+model CrmOrganization {
+  id              Int                   @id @default(autoincrement())
+  name            String
+  contactName     String?
+  email           String
+  phone           String?
+  website         String?
+  city            String?
+  state           String?
+  industry        String?
+  partnershipTier CrmOrgPartnershipTier @default(PROSPECT)
+  notes           String?               @db.Text
+  status          CrmContactStatus      @default(NOT_CONTACTED)
+  needsFollowUp   Boolean               @default(false)
+  followUpDate    DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  emailLogs       CrmEmailLog[]
+}
+
+model CrmEmailLog {
+  id                 Int               @id @default(autoincrement())
+  subject            String
+  bodyHtml           String            @db.Text
+  templateKey        String?
+  emailType          CrmEmailType      @default(OTHER)
+  direction          CrmEmailDirection @default(OUTBOUND)
+  followupSeqNumber  Int               @default(1)
+  fromEmail          String?
+  toEmails           String[]          @default([])
+  ccEmails           String[]          @default([])
+  bccEmails          String[]          @default([])
+  replyToEmails      String[]          @default([])
+  resendId           String?
+  messageId          String?
+  inReplyToMessageId String?
+  dryRun             Boolean           @default(false)
+  deliveredAt        DateTime?
+  openedAt           DateTime?
+  clickedAt          DateTime?
+  bouncedAt          DateTime?
+  complainedAt       DateTime?
+  unsubscribedAt     DateTime?
+  deliveryStatus     String?
+  isImported         Boolean           @default(false)
+  importSource       String?
+  backfillItemId     Int?
+  sentAt             DateTime          @default(now())
+  clerkId            Int?
+  crmCandidateId     Int?
+  organizationId     Int?
+  clerk              CountyClerk?      @relation(fields: [clerkId], references: [id])
+  crmCandidate       CrmCandidate?     @relation(fields: [crmCandidateId], references: [id])
+  organization       CrmOrganization?  @relation(fields: [organizationId], references: [id])
+
+  @@index([clerkId])
+  @@index([crmCandidateId])
+  @@index([organizationId])
+  @@index([backfillItemId])
+  @@index([resendId])
+  @@index([messageId])
+}
+
+model CrmBackfillRun {
+  id            String               @id @default(cuid())
+  source        CrmBackfillSource
+  status        CrmBackfillRunStatus @default(PROCESSING)
+  label         String?
+  cursor        String?
+  importedCount Int                  @default(0)
+  matchedCount  Int                  @default(0)
+  reviewedCount Int                  @default(0)
+  errorMessage  String?              @db.Text
+  summaryJson   Json?
+  startedAt     DateTime             @default(now())
+  completedAt   DateTime?
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+  items         CrmBackfillItem[]
+}
+
+model CrmBackfillItem {
+  id                  Int                     @id @default(autoincrement())
+  runId               String
+  source              CrmBackfillSource
+  sourceRecordId      String?
+  sourceMessageId     String?
+  sourceThreadKey     String?
+  sourceKind          String?
+  direction           CrmEmailDirection?
+  subject             String?
+  senderName          String?
+  senderEmail         String?
+  recipientEmail      String?
+  bodyText            String?                 @db.Text
+  bodyHtml            String?                 @db.Text
+  previewUrl          String?
+  attachmentSummary   Json?
+  resendId            String?
+  deliveryStatus      String?
+  deliveredAt         DateTime?
+  openedAt            DateTime?
+  clickedAt           DateTime?
+  bouncedAt           DateTime?
+  complainedAt        DateTime?
+  unsubscribedAt      DateTime?
+  messageAt           DateTime?
+  reviewStatus        CrmBackfillReviewStatus @default(QUEUED)
+  entityType          CrmBackfillEntityType   @default(UNKNOWN)
+  confidence          Float?
+  rationale           String?                 @db.Text
+  exactClerkId        Int?
+  exactCandidateId    Int?
+  inferredName        String?
+  inferredFirstName   String?
+  inferredLastName    String?
+  inferredEmail       String?
+  inferredCounty      String?
+  inferredState       String?
+  inferredPosition    String?
+  promotedClerkId     Int?
+  promotedCandidateId Int?
+  rawPayload          Json?
+  approvedAt          DateTime?
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  run                 CrmBackfillRun          @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@index([reviewStatus])
+  @@index([entityType])
+  @@index([resendId])
+  @@index([senderEmail])
+  @@index([recipientEmail])
+}
+
+model CrmIntakeSubmission {
+  id                       Int                         @id @default(autoincrement())
+  sourceType               CrmIntakeSourceType
+  status                   CrmIntakeSubmissionStatus   @default(RECEIVED)
+  clerkId                  Int?
+  uploaderEmail            String?
+  targetScope              CrmCoverageScope?
+  targetState              String?
+  targetCounty             String?
+  targetAuthorityLevel     CrmFilingAuthorityLevel?
+  targetAuthorityType      CrmFilingAuthorityType?
+  targetAuthorityName      String?
+  targetFilingAuthorityKey String?
+  targetMapRegionId        Int?
+  targetMapRegionType      String?
+  targetMapRegionCode      String?
+  targetMapRegionLabel     String?
+  defaultMunicipality      String?
+  defaultYear              String?
+  sheetDescription         String?                     @db.Text
+  uploadElectionTerm       String?
+  rawSubject               String?
+  rawText                  String?                     @db.Text
+  rawHtml                  String?                     @db.Text
+  replyMode                CrmIntakeReplyMode          @default(NONE)
+  pipelineMode             CrmIntakePipelineMode       @default(SKIP)
+  suggestedCoverageStatus  CrmCountyAcquisitionStatus?
+  suggestedReplyDraft      String?                     @db.Text
+  suggestedSummary         String?                     @db.Text
+  sourceConfidence         CrmSourceConfidence         @default(MEDIUM)
+  sourceCapturedAt         DateTime?
+  lastNormalizedAt         DateTime?
+  normalizationJson        Json?
+  photoPreviewJson         Json?
+  importResultJson         Json?
+  parseError               String?                     @db.Text
+  reviewNotes              String?                     @db.Text
+  reviewedByUserId         String?
+  reviewedAt               DateTime?
+  promotionUploadId        String?
+  receivedAt               DateTime                    @default(now())
+  createdAt                DateTime                    @default(now())
+  updatedAt                DateTime                    @updatedAt
+  clerk                    CountyClerk?                @relation(fields: [clerkId], references: [id])
+  promotionUpload          SpreadsheetUpload?          @relation(fields: [promotionUploadId], references: [id])
+  targetMapRegion          ElectionMapRegion?          @relation(fields: [targetMapRegionId], references: [id])
+  attachments              CrmIntakeAttachment[]
+  draftRows                CrmIntakeDraftRow[]
+  jobs                     CrmIntakeJob[]
+  promotedCandidates       CrmCandidate[]              @relation("SubmissionPromotedCandidates")
+
+  @@index([sourceType, status])
+  @@index([targetState, targetCounty, targetScope])
+  @@index([targetState, targetAuthorityLevel, targetAuthorityType])
+  @@index([clerkId])
+  @@index([receivedAt])
+}
+
+model CrmIntakeAttachment {
+  id             Int                     @id @default(autoincrement())
+  submissionId   Int
+  filename       String
+  mimeType       String?
+  attachmentType CrmIntakeAttachmentType
+  fileSize       Int?
+  blobUrl        String?
+  textContent    String?                 @db.Text
+  binaryBase64   String?                 @db.Text
+  parsedHeaders  Json?
+  parsedRows     Json?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  submission     CrmIntakeSubmission     @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId])
+  @@index([attachmentType])
+}
+
+model ApiCallLog {
+  id           Int      @id @default(autoincrement())
+  createdAt    DateTime @default(now())
+  apiType      String
+  rowId        Int?
+  submissionId Int?
+  latencyMs    Int?
+  status       String
+  error        String?  @db.Text
+  model        String?
+  promptTokens  Int?
+  outputTokens  Int?
+  totalTokens   Int?
+  query        String?
+  resultCount  Int?
+  searchDepth  String?
+  costUsd      Float?
+
+  @@index([rowId])
+  @@index([submissionId])
+  @@index([apiType, createdAt])
+}
+
+model CrmIntakeDraftRow {
+  id             Int                 @id @default(autoincrement())
+  submissionId   Int
+  fullNameRaw    String?
+  firstName      String?
+  lastName       String?
+  email          String?
+  phone          String?
+  position       String?
+  municipality   String?
+  state          String?
+  county         String?
+  year           String?
+  electionTerm   String?
+  isNonsense        Boolean             @default(false)
+  status            CrmIntakeRowStatus  @default(INCOMPLETE)
+  enrichmentStatus  String?             @default("not_started")
+  parseSource       String?
+  confidence        Float?
+  matchAuditJson    Json?
+  reviewerNotes     String?             @db.Text
+  rawData           Json?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+  submission     CrmIntakeSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId, status])
+  @@index([email])
+}
+
+model CrmIntakeJob {
+  id           String                @id @default(cuid())
+  submissionId Int
+  operation    CrmIntakeJobOperation
+  status       CrmIntakeJobStatus    @default(QUEUED)
+  payloadJson  Json?
+  error        String?               @db.Text
+  queuedAt     DateTime              @default(now())
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  submission   CrmIntakeSubmission   @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId, status])
+  @@index([status, queuedAt])
+}
+
+model CrmFilingAuthorityAlias {
+  id              Int                    @id @default(autoincrement())
+  trackingId      Int
+  state           String
+  alias           String
+  normalizedAlias String
+  sourceType      CrmAuthoritySourceType @default(MANUAL)
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  tracking        CrmCountyTracking      @relation(fields: [trackingId], references: [id], onDelete: Cascade)
+
+  @@unique([state, normalizedAlias])
+  @@index([trackingId])
+}
+
+model CandidateEmailLog {
+  id                Int       @id @default(autoincrement())
+  candidateId       Int
+  subject           String
+  bodyHtml          String    @db.Text
+  templateKey       String?
+  emailType         String    @default("OTHER")
+  followupSeqNumber Int       @default(1)
+  fromEmail         String?
+  toEmails          String[]  @default([])
+  ccEmails          String[]  @default([])
+  bccEmails         String[]  @default([])
+  replyToEmails     String[]  @default([])
+  resendId          String?
+  messageId         String?
+  dryRun            Boolean   @default(false)
+  deliveredAt       DateTime?
+  openedAt          DateTime?
+  clickedAt         DateTime?
+  bouncedAt         DateTime?
+  complainedAt      DateTime?
+  unsubscribedAt    DateTime?
+  deliveryStatus    String?
+  sentAt            DateTime  @default(now())
+  candidate         Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@index([resendId])
+  @@index([messageId])
+}
+
+model InstantlySyncRun {
+  id                      String    @id
+  startedAt               DateTime  @default(now())
+  finishedAt              DateTime?
+  status                  String
+  electionsAdded          Int       @default(0)
+  candidatesWithEmails    Int       @default(0)
+  candidatesWithoutEmails Int       @default(0)
+  errorsCount             Int       @default(0)
+  summary                 Json?
+}
+
+model InstantlyCohort {
+  id                  String      @id
+  state               String
+  electionType        String
+  cohortLetter        String
+  instantlyCampaignId String?
+  instantlyListId     String?
+  capacity            Int         @default(450)
+  createdAt           DateTime    @default(now())
+  candidates          Candidate[]
+
+  @@unique([state, electionType, cohortLetter])
+}
+
+model StripeWebhookEvent {
+  id                 Int       @id @default(autoincrement())
+  stripeEventId      String    @unique
+  eventType          String
+  objectId           String?
+  summaryEmailSentAt DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
