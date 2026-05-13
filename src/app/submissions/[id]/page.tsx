@@ -71,6 +71,7 @@ export default function SubmissionDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [enrichingRows, setEnrichingRows] = useState<Set<number>>(new Set());
   const [batchRunning, setBatchRunning] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [logSummary, setLogSummary] = useState<{ apiType: string; calls: number; totalTokens: number | null; totalCostUsd: number | null }[]>([]);
 
   const load = useCallback(() => {
@@ -130,6 +131,23 @@ export default function SubmissionDetailPage() {
   if (!submission) return null;
 
   const rows = submission.draftRows;
+
+  const statusCounts = rows.reduce<Record<string, number>>((acc, r) => {
+    const s = r.enrichmentStatus ?? "not_started";
+    acc[s] = (acc[s] ?? 0) + 1;
+    return acc;
+  }, {});
+  const statusOrder = [
+    "not_started", "search_queued", "search_running", "search_complete",
+    "gemini_queued", "gemini_running", "gemini_complete",
+    "result_saved", "needs_review", "failed",
+  ];
+  const presentStatuses = statusOrder.filter((s) => statusCounts[s]);
+
+  const visibleRows = statusFilter
+    ? rows.filter((r) => (r.enrichmentStatus ?? "not_started") === statusFilter)
+    : rows;
+
   const notStarted = rows.filter((r) => !r.enrichmentStatus || r.enrichmentStatus === "not_started").length;
   const allFailed = rows.filter((r) => r.enrichmentStatus === "failed").length;
   const searchFailed = rows.filter((r) => r.enrichmentStatus === "failed" && r.matchAuditJson?.status !== "search_complete" && r.matchAuditJson?.status !== "gemini_complete").length;
@@ -247,6 +265,57 @@ export default function SubmissionDetailPage() {
         </div>
       )}
 
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        <button
+          onClick={() => setStatusFilter(null)}
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === null
+              ? "bg-gray-800 text-white border-gray-800"
+              : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+          }`}
+        >
+          All ({rows.length})
+        </button>
+        {presentStatuses.map((s) => {
+          const colorMap: Record<string, string> = {
+            not_started: "bg-gray-100 text-gray-500 border-gray-200",
+            search_queued: "bg-blue-50 text-blue-600 border-blue-200",
+            search_running: "bg-blue-100 text-blue-700 border-blue-300",
+            search_complete: "bg-cyan-50 text-cyan-700 border-cyan-200",
+            gemini_queued: "bg-purple-50 text-purple-600 border-purple-200",
+            gemini_running: "bg-purple-100 text-purple-700 border-purple-300",
+            gemini_complete: "bg-indigo-50 text-indigo-700 border-indigo-200",
+            result_saved: "bg-green-50 text-green-700 border-green-200",
+            failed: "bg-red-50 text-red-600 border-red-200",
+            needs_review: "bg-amber-50 text-amber-700 border-amber-200",
+          };
+          const activeMap: Record<string, string> = {
+            not_started: "bg-gray-500 text-white border-gray-500",
+            search_queued: "bg-blue-500 text-white border-blue-500",
+            search_running: "bg-blue-600 text-white border-blue-600",
+            search_complete: "bg-cyan-500 text-white border-cyan-500",
+            gemini_queued: "bg-purple-500 text-white border-purple-500",
+            gemini_running: "bg-purple-600 text-white border-purple-600",
+            gemini_complete: "bg-indigo-500 text-white border-indigo-500",
+            result_saved: "bg-green-500 text-white border-green-500",
+            failed: "bg-red-500 text-white border-red-500",
+            needs_review: "bg-amber-500 text-white border-amber-500",
+          };
+          const cls = statusFilter === s
+            ? (activeMap[s] ?? "bg-gray-800 text-white border-gray-800")
+            : (colorMap[s] ?? "bg-gray-100 text-gray-500 border-gray-200");
+          return (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(statusFilter === s ? null : s)}
+              className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${cls}`}
+            >
+              {s.replace(/_/g, " ")} ({statusCounts[s]})
+            </button>
+          );
+        })}
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full text-xs border-collapse">
           <thead>
@@ -266,7 +335,7 @@ export default function SubmissionDetailPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => {
+            {visibleRows.map((row) => {
               const name =
                 [row.firstName, row.lastName].filter(Boolean).join(" ") ||
                 row.fullNameRaw ||
@@ -349,9 +418,9 @@ export default function SubmissionDetailPage() {
           </tbody>
         </table>
 
-        {rows.length === 0 && (
+        {visibleRows.length === 0 && (
           <div className="text-center text-gray-400 py-12 text-sm">
-            No draft rows for this submission.
+            {statusFilter ? `No rows with status "${statusFilter.replace(/_/g, " ")}".` : "No draft rows for this submission."}
           </div>
         )}
       </div>
