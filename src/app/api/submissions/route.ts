@@ -12,7 +12,7 @@ export async function GET() {
     },
   });
 
-  const data = submissions.map((s) => {
+  const data = submissions.map((s: (typeof submissions)[number]) => {
     const rows = s.draftRows;
     const counts = {
       total: rows.length,
