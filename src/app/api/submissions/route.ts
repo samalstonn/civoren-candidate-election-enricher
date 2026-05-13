@@ -13,7 +13,7 @@ export async function GET() {
   });
 
   const data = submissions.map((s: (typeof submissions)[number]) => {
-    const rows = s.draftRows;
+    const rows: Array<{ id: number; enrichmentStatus: string | null }> = s.draftRows;
     const counts = {
       total: rows.length,
       not_started: rows.filter((r) => !r.enrichmentStatus || r.enrichmentStatus === "not_started").length,
