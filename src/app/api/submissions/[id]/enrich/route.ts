@@ -84,7 +84,7 @@ export async function POST(
   let settled: Awaited<ReturnType<typeof runWithConcurrency>>;
   try {
     settled = await runWithConcurrency(
-      rows.map((row) => async () => {
+      rows.map((row: (typeof rows)[number]) => async () => {
         if (cancelRegistry.has(submissionId)) return row.id;
         const mode = resumeMode(row.enrichmentStatus, auditStatus(row.matchAuditJson));
         await runEnrichmentPipeline(row.id, mode);
