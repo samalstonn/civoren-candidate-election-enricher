@@ -94,7 +94,7 @@ SEARCH RESULTS:
 ${sourcesText || "No search results available."}
 
 INSTRUCTIONS:
-- Write a biography of approximately 600 words summarizing who this candidate is based on the search results. Cover their background, professional experience, community involvement, policy positions if known, and why they are running.
+- Write a biography of approximately 600 characters summarizing who this candidate is based on the search results. Cover their background, policy positions if known, and why they are running.
 - Extract an email address ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer email addresses.
 - Extract a phone number ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer phone numbers.
 - Extract their current professional role or occupation (e.g. "Attorney", "Small business owner", "Retired teacher"). This should be their professional identity, NOT the election they are running in. If sources indicate they currently hold this office (i.e. they are an incumbent), use "Incumbent [position title]". If no professional role is found at all, use "Candidate for [position title]".

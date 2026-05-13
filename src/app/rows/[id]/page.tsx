@@ -368,6 +368,23 @@ export default function RowDetailPage() {
         </div>
       )}
 
+      {(audit?.parsedResult?.currentRole || audit?.parsedResult?.currentCity) && (
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          {audit.parsedResult?.currentRole && (
+            <div className="bg-white border border-gray-200 rounded p-3">
+              <div className="text-xs text-gray-400 mb-1">Current Role</div>
+              <div className="text-sm text-gray-900">{audit.parsedResult.currentRole}</div>
+            </div>
+          )}
+          {audit.parsedResult?.currentCity && (
+            <div className="bg-white border border-gray-200 rounded p-3">
+              <div className="text-xs text-gray-400 mb-1">Location</div>
+              <div className="text-sm text-gray-900">{audit.parsedResult.currentCity}</div>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* API Usage Summary */}
       {logSummary.length > 0 && (
         <div className="mb-4 flex gap-3">
