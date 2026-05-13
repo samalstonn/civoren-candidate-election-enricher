@@ -2,6 +2,16 @@ import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import type { ParsedEnrichmentResult, MatchAuditJson } from "@/types/enrichment";
 
+const EMAIL_RE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+
+function isValidEmail(v: string): boolean {
+  return EMAIL_RE.test(v.trim());
+}
+
+function isValidPhone(v: string): boolean {
+  return v.replace(/\D/g, "").length >= 10;
+}
+
 export async function saveEnrichmentResult(
   rowId: number,
   parsed: ParsedEnrichmentResult,
@@ -9,13 +19,35 @@ export async function saveEnrichmentResult(
 ): Promise<void> {
   const row = await prisma.crmIntakeDraftRow.findUnique({
     where: { id: rowId },
-    select: { state: true, rawData: true, position: true },
+    select: { state: true, rawData: true, position: true, email: true, phone: true },
   });
 
   const finalSavedFields: Record<string, unknown> = {};
 
-  if (parsed.email) finalSavedFields.email = parsed.email;
-  if (parsed.phone) finalSavedFields.phone = parsed.phone;
+  let emailToSave: string | null = null;
+  if (parsed.email) {
+    if (row?.email) {
+      finalSavedFields.emailSkipped = "existing value preserved";
+    } else if (!isValidEmail(parsed.email)) {
+      finalSavedFields.emailSkipped = `invalid format: ${parsed.email}`;
+    } else {
+      emailToSave = parsed.email.trim().toLowerCase();
+      finalSavedFields.email = emailToSave;
+    }
+  }
+
+  let phoneToSave: string | null = null;
+  if (parsed.phone) {
+    if (row?.phone) {
+      finalSavedFields.phoneSkipped = "existing value preserved";
+    } else if (!isValidPhone(parsed.phone)) {
+      finalSavedFields.phoneSkipped = `invalid format: ${parsed.phone}`;
+    } else {
+      phoneToSave = parsed.phone.trim();
+      finalSavedFields.phone = phoneToSave;
+    }
+  }
+
   if (parsed.confidence !== undefined)
     finalSavedFields.confidence = parsed.confidence;
   if (parsed.biography || parsed.notes) {
@@ -54,8 +86,8 @@ export async function saveEnrichmentResult(
   await prisma.crmIntakeDraftRow.update({
     where: { id: rowId },
     data: {
-      ...(parsed.email ? { email: parsed.email } : {}),
-      ...(parsed.phone ? { phone: parsed.phone } : {}),
+      ...(emailToSave ? { email: emailToSave } : {}),
+      ...(phoneToSave ? { phone: phoneToSave } : {}),
       ...(parsed.confidence !== undefined
         ? { confidence: parsed.confidence }
         : {}),
