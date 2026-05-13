@@ -368,18 +368,32 @@ export default function RowDetailPage() {
         </div>
       )}
 
-      {(audit?.parsedResult?.currentRole || audit?.parsedResult?.currentCity) && (
+      {(audit?.parsedResult?.currentRole || row.position || audit?.parsedResult?.currentCity || row.state) && (
         <div className="mb-4 grid grid-cols-2 gap-3">
-          {audit.parsedResult?.currentRole && (
+          {(audit?.parsedResult?.currentRole || row.position) && (
             <div className="bg-white border border-gray-200 rounded p-3">
-              <div className="text-xs text-gray-400 mb-1">Current Role</div>
-              <div className="text-sm text-gray-900">{audit.parsedResult.currentRole}</div>
+              <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+                Current Role
+                {!audit?.parsedResult?.currentRole && row.position && (
+                  <span className="text-gray-300 font-normal">(position fallback)</span>
+                )}
+              </div>
+              <div className="text-sm text-gray-900">
+                {audit?.parsedResult?.currentRole ?? `Candidate for ${row.position}`}
+              </div>
             </div>
           )}
-          {audit.parsedResult?.currentCity && (
+          {(audit?.parsedResult?.currentCity || row.state) && (
             <div className="bg-white border border-gray-200 rounded p-3">
-              <div className="text-xs text-gray-400 mb-1">Location</div>
-              <div className="text-sm text-gray-900">{audit.parsedResult.currentCity}</div>
+              <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
+                Location
+                {!audit?.parsedResult?.currentCity && row.state && (
+                  <span className="text-gray-300 font-normal">(state fallback)</span>
+                )}
+              </div>
+              <div className="text-sm text-gray-900">
+                {audit?.parsedResult?.currentCity ?? row.state}
+              </div>
             </div>
           )}
         </div>
