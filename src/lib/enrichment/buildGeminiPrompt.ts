@@ -77,10 +77,12 @@ export function buildGeminiPrompt(
   const usefulSources = relevantSources.length > 0 ? relevantSources : thickSources;
 
   const sourcesText = usefulSources
-    .map((s, i) => {
+    .map((s) => {
       const content =
         s.content.length > 4000 ? s.content.slice(0, 4000) + "…" : s.content;
-      return `[Source ${i + 1}] ${s.title}\nURL: ${s.url}\n${content}`;
+      let domain = s.url;
+      try { domain = new URL(s.url).hostname.replace(/^www\./, ""); } catch { /* keep url */ }
+      return `[${domain}] ${s.title}\nURL: ${s.url}\n${content}`;
     })
     .join("\n\n---\n\n");
 
