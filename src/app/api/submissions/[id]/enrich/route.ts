@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runEnrichmentPipeline } from "@/lib/enrichment/pipeline";
 import type { PipelineMode } from "@/lib/enrichment/pipeline";
+import { CandidateIntakeAdapter } from "@/lib/enrichment/adapters/candidate-intake";
 import { runWithConcurrency } from "@/lib/concurrency";
 import { cancelRegistry } from "@/lib/cancelRegistry";
 
@@ -87,7 +88,8 @@ export async function POST(
       rows.map((row: (typeof rows)[number]) => async () => {
         if (cancelRegistry.has(submissionId)) return row.id;
         const mode = resumeMode(row.enrichmentStatus, auditStatus(row.matchAuditJson));
-        await runEnrichmentPipeline(row.id, mode);
+        const adapter = await CandidateIntakeAdapter.create(row.id);
+        await runEnrichmentPipeline(adapter, mode);
         return row.id;
       }),
       CONCURRENCY

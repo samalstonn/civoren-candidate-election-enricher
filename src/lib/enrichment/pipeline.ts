@@ -1,14 +1,10 @@
-import { prisma } from "@/lib/prisma";
-import { buildSearchQuery, buildContactSearchQuery } from "./buildSearchQuery";
 import { runSearch } from "./runSearch";
-import { buildGeminiPrompt } from "./buildGeminiPrompt";
 import { callGemini } from "./callGemini";
 import { parseGeminiResult } from "./parseGeminiResult";
-import { saveEnrichmentResult } from "./saveEnrichmentResult";
-import { updateMatchAudit } from "./updateMatchAudit";
 import { enrichWithTranscripts } from "./fetchYouTubeTranscript";
 import { injectContactPages } from "./fetchContactPage";
 import { enrichThinSources } from "./fetchThinSources";
+import type { EntityAdapter } from "@/types/enrichment";
 import type { MatchAuditJson, TavilyResult, ParsedEnrichmentResult } from "@/types/enrichment";
 
 export type PipelineMode = "search" | "search_general" | "search_contact" | "gemini" | "save" | "full";
@@ -24,11 +20,11 @@ const EMAIL_RE = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/g;
 
 function prioritizeSources(
   results: TavilyResult[],
-  row: { firstName?: string | null; lastName?: string | null; fullNameRaw?: string | null }
+  nameParts: { firstName?: string | null; lastName?: string | null; fullNameRaw?: string | null }
 ): { sorted: TavilyResult[]; ranked: { url: string; title: string; sourceQuery?: "general" | "contact"; score: number; content: string }[] } {
-  const firstName = (row.firstName ?? "").toLowerCase().replace(/\s+/g, "");
-  const lastName = (row.lastName ?? "").toLowerCase().replace(/\s+/g, "");
-  const fullName = (row.fullNameRaw ?? "").toLowerCase().replace(/\s+/g, "");
+  const firstName = (nameParts.firstName ?? "").toLowerCase().replace(/\s+/g, "");
+  const lastName = (nameParts.lastName ?? "").toLowerCase().replace(/\s+/g, "");
+  const fullName = (nameParts.fullNameRaw ?? "").toLowerCase().replace(/\s+/g, "");
 
   function computeScore(s: TavilyResult): number {
     const url = s.url.toLowerCase();
@@ -79,33 +75,12 @@ function filterSources(results: TavilyResult[]): TavilyResult[] {
   });
 }
 
-function loadAudit(raw: unknown): MatchAuditJson | null {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as unknown as MatchAuditJson;
-  }
-  return null;
-}
-
-async function getAudit(rowId: number): Promise<MatchAuditJson | null> {
-  const record = await prisma.crmIntakeDraftRow.findUnique({
-    where: { id: rowId },
-    select: { matchAuditJson: true },
-  });
-  return loadAudit(record?.matchAuditJson);
-}
-
 async function runSearch_stage(
-  rowId: number,
+  adapter: EntityAdapter,
   runId: string,
   startedAt: string
 ): Promise<{ searchQuery: string; selectedSources: TavilyResult[]; searchRawResponse: unknown }> {
-  const row = await prisma.crmIntakeDraftRow.findUnique({
-    where: { id: rowId },
-    include: { submission: true },
-  });
-  if (!row) throw new Error(`Row ${rowId} not found`);
-
-  await updateMatchAudit(rowId, {
+  await adapter.updateAudit({
     runId,
     startedAt,
     searchQuery: "",
@@ -113,15 +88,15 @@ async function runSearch_stage(
     errors: [],
   });
 
-  const searchQuery = buildSearchQuery(row, row.submission);
-  const contactSearchQuery = buildContactSearchQuery(row, row.submission);
-  await updateMatchAudit(rowId, { searchQuery, contactSearchQuery, status: "search_running", errors: [] });
+  const searchQuery = adapter.buildSearchQuery();
+  const contactSearchQuery = adapter.buildContactSearchQuery();
+  await adapter.updateAudit({ searchQuery, contactSearchQuery, status: "search_running", errors: [] });
 
   let searchRawResponse;
   let contactSearchRawResponse;
   let selectedSources: TavilyResult[] = [];
   try {
-    const ctx = { rowId, submissionId: row.submissionId };
+    const ctx = adapter.logContext;
     [searchRawResponse, contactSearchRawResponse] = await Promise.all([
       runSearch(searchQuery, ctx),
       runSearch(contactSearchQuery, ctx),
@@ -144,15 +119,15 @@ async function runSearch_stage(
     }
 
     const filtered = filterSources(merged);
-    const withContactPages = await injectContactPages(filtered, row);
+    const withContactPages = await injectContactPages(filtered, adapter.nameParts);
     const withTranscripts = await enrichWithTranscripts(withContactPages);
     const withFetched = await enrichThinSources(withTranscripts);
-    const { sorted, ranked } = prioritizeSources(withFetched, row);
+    const { sorted, ranked } = prioritizeSources(withFetched, adapter.nameParts);
     selectedSources = sorted.slice(0, 5);
-    await updateMatchAudit(rowId, { rankedSources: ranked });
+    await adapter.updateAudit({ rankedSources: ranked });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateMatchAudit(rowId, {
+    await adapter.updateAudit({
       searchQuery,
       contactSearchQuery,
       searchRawResponse: { error: msg },
@@ -162,7 +137,7 @@ async function runSearch_stage(
     throw err;
   }
 
-  await updateMatchAudit(rowId, {
+  await adapter.updateAudit({
     searchQuery,
     contactSearchQuery,
     searchRawResponse,
@@ -171,39 +146,32 @@ async function runSearch_stage(
     status: "search_complete",
   });
 
-  // Build and store a prompt preview so the user can inspect it before calling Gemini
-  const geminiPrompt = buildGeminiPrompt(row, row.submission, selectedSources);
-  await updateMatchAudit(rowId, { geminiPrompt });
+  const geminiPrompt = await adapter.buildGeminiPrompt(selectedSources);
+  await adapter.updateAudit({ geminiPrompt });
 
   return { searchQuery, selectedSources, searchRawResponse };
 }
 
 async function runSingleSearch_stage(
-  rowId: number,
+  adapter: EntityAdapter,
   which: "general" | "contact"
 ): Promise<void> {
-  const row = await prisma.crmIntakeDraftRow.findUnique({
-    where: { id: rowId },
-    include: { submission: true },
-  });
-  if (!row) throw new Error(`Row ${rowId} not found`);
+  const existingAudit = await adapter.getAudit();
 
-  const existingAudit = await getAudit(rowId);
+  const searchQuery = adapter.buildSearchQuery();
+  const contactSearchQuery = adapter.buildContactSearchQuery();
 
-  const searchQuery = buildSearchQuery(row, row.submission);
-  const contactSearchQuery = buildContactSearchQuery(row, row.submission);
-
-  await updateMatchAudit(rowId, { searchQuery, contactSearchQuery, status: "search_running", errors: [] });
+  await adapter.updateAudit({ searchQuery, contactSearchQuery, status: "search_running", errors: [] });
 
   let newRawResponse;
   try {
     newRawResponse = await runSearch(
       which === "general" ? searchQuery : contactSearchQuery,
-      { rowId, submissionId: row.submissionId }
+      adapter.logContext
     );
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateMatchAudit(rowId, { status: "failed", errors: [{ message: msg, timestamp: new Date().toISOString() }] });
+    await adapter.updateAudit({ status: "failed", errors: [{ message: msg, timestamp: new Date().toISOString() }] });
     throw err;
   }
 
@@ -226,46 +194,40 @@ async function runSingleSearch_stage(
   }
 
   const filtered = filterSources(merged);
-  const withContactPages = await injectContactPages(filtered, row);
+  const withContactPages = await injectContactPages(filtered, adapter.nameParts);
   const withTranscripts = await enrichWithTranscripts(withContactPages);
   const withFetched = await enrichThinSources(withTranscripts);
-  const { sorted, ranked } = prioritizeSources(withFetched, row);
+  const { sorted, ranked } = prioritizeSources(withFetched, adapter.nameParts);
   const selectedSources = sorted.slice(0, 5);
-  await updateMatchAudit(rowId, { rankedSources: ranked });
+  await adapter.updateAudit({ rankedSources: ranked });
 
   const update =
     which === "general"
       ? { searchQuery, contactSearchQuery, searchRawResponse: newRawResponse, selectedSources, status: "search_complete" as const }
       : { searchQuery, contactSearchQuery, contactSearchRawResponse: newRawResponse, selectedSources, status: "search_complete" as const };
 
-  await updateMatchAudit(rowId, update);
+  await adapter.updateAudit(update);
 
-  const geminiPrompt = buildGeminiPrompt(row, row.submission, selectedSources);
-  await updateMatchAudit(rowId, { geminiPrompt });
+  const geminiPrompt = await adapter.buildGeminiPrompt(selectedSources);
+  await adapter.updateAudit({ geminiPrompt });
 }
 
 async function runGemini_stage(
-  rowId: number,
+  adapter: EntityAdapter,
   selectedSources: TavilyResult[]
 ): Promise<ParsedEnrichmentResult> {
-  const row = await prisma.crmIntakeDraftRow.findUnique({
-    where: { id: rowId },
-    include: { submission: true },
-  });
-  if (!row) throw new Error(`Row ${rowId} not found`);
+  await adapter.updateAudit({ status: "gemini_queued", errors: [] });
 
-  await updateMatchAudit(rowId, { status: "gemini_queued", errors: [] });
-
-  const geminiPrompt = buildGeminiPrompt(row, row.submission, selectedSources);
-  await updateMatchAudit(rowId, { geminiPrompt, status: "gemini_running" });
+  const geminiPrompt = await adapter.buildGeminiPrompt(selectedSources);
+  await adapter.updateAudit({ geminiPrompt, status: "gemini_running" });
 
   let geminiRawResponse: string;
   try {
-    const result = await callGemini(geminiPrompt, { rowId, submissionId: row.submissionId });
+    const result = await callGemini(geminiPrompt, adapter.logContext);
     geminiRawResponse = result.text;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateMatchAudit(rowId, {
+    await adapter.updateAudit({
       geminiPrompt,
       geminiRawResponse: msg,
       status: "failed",
@@ -274,14 +236,14 @@ async function runGemini_stage(
     throw err;
   }
 
-  await updateMatchAudit(rowId, { geminiRawResponse, status: "gemini_complete" });
+  await adapter.updateAudit({ geminiRawResponse, status: "gemini_complete" });
 
   let parsedResult: ParsedEnrichmentResult;
   try {
     parsedResult = parseGeminiResult(geminiRawResponse);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateMatchAudit(rowId, {
+    await adapter.updateAudit({
       geminiRawResponse,
       status: "failed",
       errors: [{ message: msg, timestamp: new Date().toISOString() }],
@@ -289,74 +251,74 @@ async function runGemini_stage(
     throw err;
   }
 
-  await updateMatchAudit(rowId, { parsedResult, status: "gemini_complete" });
+  await adapter.updateAudit({ parsedResult, status: "gemini_complete" });
   return parsedResult;
 }
 
 async function runSave_stage(
-  rowId: number,
+  adapter: EntityAdapter,
   parsedResult: ParsedEnrichmentResult
 ): Promise<void> {
-  const audit = await getAudit(rowId);
+  const audit = await adapter.getAudit();
   const fallback: MatchAuditJson = {
     runId: crypto.randomUUID(),
     status: "gemini_complete",
     startedAt: new Date().toISOString(),
     searchQuery: "",
   };
-  await saveEnrichmentResult(rowId, parsedResult, audit ?? fallback);
+  await adapter.saveResult(parsedResult, audit ?? fallback);
 }
 
 export async function runEnrichmentPipeline(
-  rowId: number,
+  adapter: EntityAdapter,
   mode: PipelineMode = "full"
 ): Promise<void> {
   try {
     if (mode === "search") {
       const runId = crypto.randomUUID();
-      await runSearch_stage(rowId, runId, new Date().toISOString());
+      await runSearch_stage(adapter, runId, new Date().toISOString());
       return;
     }
 
     if (mode === "search_general") {
-      await runSingleSearch_stage(rowId, "general");
+      await runSingleSearch_stage(adapter, "general");
       return;
     }
 
     if (mode === "search_contact") {
-      await runSingleSearch_stage(rowId, "contact");
+      await runSingleSearch_stage(adapter, "contact");
       return;
     }
 
     if (mode === "gemini") {
-      const audit = await getAudit(rowId);
+      const audit = await adapter.getAudit();
       const selectedSources = audit?.selectedSources;
       if (!selectedSources || selectedSources.length === 0) {
         throw new Error("No search results found in audit. Run Search first.");
       }
-      await runGemini_stage(rowId, selectedSources);
+      await runGemini_stage(adapter, selectedSources);
       return;
     }
 
     if (mode === "save") {
-      const audit = await getAudit(rowId);
+      const audit = await adapter.getAudit();
       const parsedResult = audit?.parsedResult;
       if (!parsedResult) {
         throw new Error("No parsed result found in audit. Run Gemini first.");
       }
-      await runSave_stage(rowId, parsedResult);
+      await runSave_stage(adapter, parsedResult);
       return;
     }
 
     // "full" — fresh run of all three stages
     const runId = crypto.randomUUID();
     const startedAt = new Date().toISOString();
-    const { selectedSources } = await runSearch_stage(rowId, runId, startedAt);
-    const parsedResult = await runGemini_stage(rowId, selectedSources);
-    await runSave_stage(rowId, parsedResult);
+    const { selectedSources } = await runSearch_stage(adapter, runId, startedAt);
+    const parsedResult = await runGemini_stage(adapter, selectedSources);
+    await runSave_stage(adapter, parsedResult);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await updateMatchAudit(rowId, {
+    await adapter.updateAudit({
       status: "failed",
       completedAt: new Date().toISOString(),
       errors: [{ message: msg, timestamp: new Date().toISOString() }],

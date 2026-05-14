@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { runEnrichmentPipeline, type PipelineMode } from "@/lib/enrichment/pipeline";
+import { CandidateIntakeAdapter } from "@/lib/enrichment/adapters/candidate-intake";
 
 const VALID_MODES: PipelineMode[] = ["search", "search_general", "search_contact", "gemini", "save", "full"];
 
@@ -24,7 +25,8 @@ export async function POST(
   }
 
   try {
-    await runEnrichmentPipeline(rowId, mode);
+    const adapter = await CandidateIntakeAdapter.create(rowId);
+    await runEnrichmentPipeline(adapter, mode);
     return NextResponse.json({ success: true, rowId, mode });
   } catch (err) {
     return NextResponse.json(

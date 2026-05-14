@@ -52,3 +52,17 @@ export interface TavilySearchResponse {
   results: TavilyResult[];
   answer?: string;
 }
+
+export interface EntityAdapter {
+  readonly entityId: number;
+  readonly logContext: { rowId: number; submissionId?: number };
+  readonly nameParts: { firstName?: string | null; lastName?: string | null; fullNameRaw?: string | null };
+
+  buildSearchQuery(): string;
+  buildContactSearchQuery(): string;
+  buildGeminiPrompt(sources: TavilyResult[]): Promise<string> | string;
+
+  getAudit(): Promise<MatchAuditJson | null>;
+  updateAudit(patch: Partial<MatchAuditJson>): Promise<void>;
+  saveResult(parsed: ParsedEnrichmentResult, audit: MatchAuditJson): Promise<void>;
+}
