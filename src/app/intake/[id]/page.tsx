@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { createColumnHelper, type ColumnDef } from "@tanstack/react-table";
+import { DataTable, numberFilter, cells } from "@/components/DataTable";
 
 interface DraftRow {
   id: number;
@@ -64,7 +66,21 @@ function statusBadge(status: string | null) {
   );
 }
 
-export default function SubmissionDetailPage() {
+interface TableRow {
+  id: number;
+  name: string;
+  positionLocation: string;
+  enrichmentStatus: string | null;
+  hasEmail: boolean;
+  hasPhone: boolean;
+  hasRole: boolean;
+  hasCity: boolean;
+  bioLength: number;
+  confidence: number | null;
+  updatedAt: string;
+}
+
+export default function IntakeDetailPage() {
   const params = useParams<{ id: string }>();
   const [submission, setSubmission] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,7 +88,9 @@ export default function SubmissionDetailPage() {
   const [enrichingRows, setEnrichingRows] = useState<Set<number>>(new Set());
   const [batchRunning, setBatchRunning] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [logSummary, setLogSummary] = useState<{ apiType: string; calls: number; totalTokens: number | null; totalCostUsd: number | null }[]>([]);
+  const [logSummary, setLogSummary] = useState<
+    { apiType: string; calls: number; totalTokens: number | null; totalCostUsd: number | null }[]
+  >([]);
 
   const load = useCallback(() => {
     fetch(`/api/submissions/${params.id}`)
@@ -94,19 +112,22 @@ export default function SubmissionDetailPage() {
     load();
   }, [load]);
 
-  async function enrichRow(rowId: number) {
-    setEnrichingRows((prev) => new Set(prev).add(rowId));
-    try {
-      await fetch(`/api/rows/${rowId}/enrich`, { method: "POST" });
-      load();
-    } finally {
-      setEnrichingRows((prev) => {
-        const next = new Set(prev);
-        next.delete(rowId);
-        return next;
-      });
-    }
-  }
+  const enrichRow = useCallback(
+    async (rowId: number) => {
+      setEnrichingRows((prev) => new Set(prev).add(rowId));
+      try {
+        await fetch(`/api/rows/${rowId}/enrich`, { method: "POST" });
+        load();
+      } finally {
+        setEnrichingRows((prev) => {
+          const next = new Set(prev);
+          next.delete(rowId);
+          return next;
+        });
+      }
+    },
+    [load]
+  );
 
   async function enrichTarget(target: string) {
     setBatchRunning(true);
@@ -126,6 +147,118 @@ export default function SubmissionDetailPage() {
     await fetch(`/api/submissions/${params.id}/cancel`, { method: "POST" });
   }
 
+  const columns = useMemo<ColumnDef<TableRow, any>[]>(() => {
+    const h = createColumnHelper<TableRow>();
+    return [
+      h.accessor("id", {
+        header: "ID",
+        cell: (info) => (
+          <span className="text-gray-400">#{info.getValue()}</span>
+        ),
+        filterFn: numberFilter,
+      }),
+      h.accessor("name", {
+        header: "Candidate",
+        cell: (info) => (
+          <span className="text-gray-900 font-medium">{info.getValue()}</span>
+        ),
+        filterFn: "includesString",
+      }),
+      h.accessor("positionLocation", {
+        header: "Position / Location",
+        cell: (info) => (
+          <span className="text-gray-500 max-w-xs truncate inline-block align-bottom">
+            {info.getValue() || <span className="text-gray-300">—</span>}
+          </span>
+        ),
+        filterFn: "includesString",
+      }),
+      h.accessor("enrichmentStatus", {
+        header: "Status",
+        cell: (info) => statusBadge(info.getValue()),
+        filterFn: "includesString",
+      }),
+      h.accessor("hasEmail", {
+        header: "Email",
+        cell: (info) => cells.presence(info.getValue() || null),
+        filterFn: (row, columnId, value) => {
+          if (value === undefined || value === null || value === "") return true;
+          return row.getValue(columnId) === value;
+        },
+      }),
+      h.accessor("hasPhone", {
+        header: "Phone",
+        cell: (info) => cells.presence(info.getValue() || null),
+      }),
+      h.accessor("hasRole", {
+        header: "Role",
+        cell: (info) => cells.presence(info.getValue() || null),
+      }),
+      h.accessor("hasCity", {
+        header: "City",
+        cell: (info) => cells.presence(info.getValue() || null),
+      }),
+      h.accessor("bioLength", {
+        header: "Bio",
+        cell: (info) =>
+          info.getValue() > 0 ? (
+            <span className="text-gray-500 tabular-nums">{info.getValue()}</span>
+          ) : (
+            <span className="text-gray-300">—</span>
+          ),
+        filterFn: numberFilter,
+      }),
+      h.accessor("confidence", {
+        header: "Conf.",
+        cell: (info) => {
+          const v = info.getValue();
+          return v != null ? (
+            <span className="text-gray-500 tabular-nums">
+              {(v * 100).toFixed(0)}%
+            </span>
+          ) : (
+            <span className="text-gray-300">—</span>
+          );
+        },
+        filterFn: numberFilter,
+      }),
+      h.accessor("updatedAt", {
+        header: "Last Run",
+        cell: (info) => (
+          <span className="text-gray-400">
+            {new Date(info.getValue()).toLocaleString()}
+          </span>
+        ),
+        enableColumnFilter: false,
+        sortingFn: "datetime",
+      }),
+      h.display({
+        id: "actions",
+        header: "Actions",
+        cell: ({ row }) => {
+          const isEnriching = enrichingRows.has(row.original.id);
+          return (
+            <div className="flex gap-2">
+              <button
+                onClick={() => enrichRow(row.original.id)}
+                disabled={isEnriching}
+                className="px-2 py-1 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 disabled:opacity-40 rounded transition-colors"
+              >
+                {isEnriching ? "Running…" : "Enrich"}
+              </button>
+              <Link
+                href={`/rows/${row.original.id}`}
+                className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition-colors"
+              >
+                Details
+              </Link>
+            </div>
+          );
+        },
+      }),
+    ];
+  }, [enrichRow, enrichingRows]);
+
   if (loading) return <div className="text-gray-400 text-sm">Loading...</div>;
   if (error) return <div className="text-red-500 text-sm">Error: {error}</div>;
   if (!submission) return null;
@@ -138,9 +271,16 @@ export default function SubmissionDetailPage() {
     return acc;
   }, {});
   const statusOrder = [
-    "not_started", "search_queued", "search_running", "search_complete",
-    "gemini_queued", "gemini_running", "gemini_complete",
-    "result_saved", "needs_review", "failed",
+    "not_started",
+    "search_queued",
+    "search_running",
+    "search_complete",
+    "gemini_queued",
+    "gemini_running",
+    "gemini_complete",
+    "result_saved",
+    "needs_review",
+    "failed",
   ];
   const presentStatuses = statusOrder.filter((s) => statusCounts[s]);
 
@@ -148,17 +288,57 @@ export default function SubmissionDetailPage() {
     ? rows.filter((r) => (r.enrichmentStatus ?? "not_started") === statusFilter)
     : rows;
 
-  const notStarted = rows.filter((r) => !r.enrichmentStatus || r.enrichmentStatus === "not_started").length;
+  const tableRows: TableRow[] = visibleRows.map((row) => {
+    const name =
+      [row.firstName, row.lastName].filter(Boolean).join(" ") ||
+      row.fullNameRaw ||
+      "—";
+    const location = [row.municipality, row.county, row.state]
+      .filter(Boolean)
+      .join(", ");
+    const positionLocation =
+      [row.position, location].filter(Boolean).join(" · ") || "";
+    return {
+      id: row.id,
+      name,
+      positionLocation,
+      enrichmentStatus: row.enrichmentStatus,
+      hasEmail: Boolean(row.email),
+      hasPhone: Boolean(row.phone),
+      hasRole: Boolean(row.matchAuditJson?.parsedResult?.currentRole),
+      hasCity: Boolean(row.matchAuditJson?.parsedResult?.currentCity),
+      bioLength: row.matchAuditJson?.parsedResult?.biography?.length ?? 0,
+      confidence: row.confidence,
+      updatedAt: row.updatedAt,
+    };
+  });
+
+  const notStarted = rows.filter(
+    (r) => !r.enrichmentStatus || r.enrichmentStatus === "not_started"
+  ).length;
   const allFailed = rows.filter((r) => r.enrichmentStatus === "failed").length;
-  const searchFailed = rows.filter((r) => r.enrichmentStatus === "failed" && r.matchAuditJson?.status !== "search_complete" && r.matchAuditJson?.status !== "gemini_complete").length;
-  const geminiFailed = rows.filter((r) => r.enrichmentStatus === "failed" && r.matchAuditJson?.status === "search_complete").length;
-  const saveFailed = rows.filter((r) => r.enrichmentStatus === "failed" && r.matchAuditJson?.status === "gemini_complete").length;
+  const searchFailed = rows.filter(
+    (r) =>
+      r.enrichmentStatus === "failed" &&
+      r.matchAuditJson?.status !== "search_complete" &&
+      r.matchAuditJson?.status !== "gemini_complete"
+  ).length;
+  const geminiFailed = rows.filter(
+    (r) =>
+      r.enrichmentStatus === "failed" &&
+      r.matchAuditJson?.status === "search_complete"
+  ).length;
+  const saveFailed = rows.filter(
+    (r) =>
+      r.enrichmentStatus === "failed" &&
+      r.matchAuditJson?.status === "gemini_complete"
+  ).length;
 
   return (
     <div>
       <div className="mb-1 text-xs text-gray-400">
-        <Link href="/submissions" className="hover:text-gray-600">
-          Submissions
+        <Link href="/intake" className="hover:text-gray-600">
+          CRM Intake
         </Link>{" "}
         / #{submission.id}
       </div>
@@ -253,11 +433,18 @@ export default function SubmissionDetailPage() {
       {logSummary.length > 0 && (
         <div className="mb-4 flex gap-3">
           {logSummary.map((s) => (
-            <div key={s.apiType} className="bg-white border border-gray-200 rounded p-3 flex-1">
+            <div
+              key={s.apiType}
+              className="bg-white border border-gray-200 rounded p-3 flex-1"
+            >
               <div className="text-xs text-gray-400 mb-1 capitalize">{s.apiType}</div>
-              <div className="text-sm text-gray-900 font-medium">{s.calls} call{s.calls !== 1 ? "s" : ""}</div>
+              <div className="text-sm text-gray-900 font-medium">
+                {s.calls} call{s.calls !== 1 ? "s" : ""}
+              </div>
               <div className="text-xs text-gray-500 mt-0.5">
-                {s.totalTokens != null && <span>{s.totalTokens.toLocaleString()} tokens · </span>}
+                {s.totalTokens != null && (
+                  <span>{s.totalTokens.toLocaleString()} tokens · </span>
+                )}
                 {s.totalCostUsd != null && <span>${s.totalCostUsd.toFixed(4)}</span>}
               </div>
             </div>
@@ -301,9 +488,10 @@ export default function SubmissionDetailPage() {
             failed: "bg-red-500 text-white border-red-500",
             needs_review: "bg-amber-500 text-white border-amber-500",
           };
-          const cls = statusFilter === s
-            ? (activeMap[s] ?? "bg-gray-800 text-white border-gray-800")
-            : (colorMap[s] ?? "bg-gray-100 text-gray-500 border-gray-200");
+          const cls =
+            statusFilter === s
+              ? activeMap[s] ?? "bg-gray-800 text-white border-gray-800"
+              : colorMap[s] ?? "bg-gray-100 text-gray-500 border-gray-200";
           return (
             <button
               key={s}
@@ -316,114 +504,15 @@ export default function SubmissionDetailPage() {
         })}
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs border-collapse">
-          <thead>
-            <tr className="border-b border-gray-200 text-gray-400 text-left">
-              <th className="pb-2 pr-3 font-medium">ID</th>
-              <th className="pb-2 pr-3 font-medium">Candidate</th>
-              <th className="pb-2 pr-3 font-medium">Position / Location</th>
-              <th className="pb-2 pr-3 font-medium">Status</th>
-              <th className="pb-2 pr-3 font-medium text-center">Email</th>
-              <th className="pb-2 pr-3 font-medium text-center">Phone</th>
-              <th className="pb-2 pr-3 font-medium text-center">Role</th>
-              <th className="pb-2 pr-3 font-medium text-center">City</th>
-              <th className="pb-2 pr-3 font-medium text-center">Bio</th>
-              <th className="pb-2 pr-3 font-medium text-center">Conf.</th>
-              <th className="pb-2 pr-3 font-medium">Last Run</th>
-              <th className="pb-2 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {visibleRows.map((row) => {
-              const name =
-                [row.firstName, row.lastName].filter(Boolean).join(" ") ||
-                row.fullNameRaw ||
-                "—";
-              const location = [row.municipality, row.county, row.state]
-                .filter(Boolean)
-                .join(", ");
-              const isEnriching = enrichingRows.has(row.id);
-
-              return (
-                <tr
-                  key={row.id}
-                  className="border-b border-gray-100 hover:bg-white transition-colors"
-                >
-                  <td className="py-2 pr-3 text-gray-400">#{row.id}</td>
-                  <td className="py-2 pr-3 text-gray-900 font-medium">{name}</td>
-                  <td className="py-2 pr-3 text-gray-500 max-w-xs truncate">
-                    {[row.position, location].filter(Boolean).join(" · ") || "—"}
-                  </td>
-                  <td className="py-2 pr-3">{statusBadge(row.enrichmentStatus)}</td>
-                  <td className="py-2 pr-3 text-center">
-                    {row.email ? (
-                      <span className="text-green-600">✓</span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-center">
-                    {row.phone ? (
-                      <span className="text-green-600">✓</span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-center">
-                    {row.matchAuditJson?.parsedResult?.currentRole ? (
-                      <span className="text-green-600">✓</span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-center">
-                    {row.matchAuditJson?.parsedResult?.currentCity ? (
-                      <span className="text-green-600">✓</span>
-                    ) : (
-                      <span className="text-gray-300">—</span>
-                    )}
-                  </td>
-                  <td className="py-2 pr-3 text-center text-gray-500">
-                    {row.matchAuditJson?.parsedResult?.biography
-                      ? row.matchAuditJson.parsedResult.biography.length
-                      : <span className="text-gray-300">—</span>}
-                  </td>
-                  <td className="py-2 pr-3 text-center text-gray-500">
-                    {row.confidence != null
-                      ? (row.confidence * 100).toFixed(0) + "%"
-                      : "—"}
-                  </td>
-                  <td className="py-2 pr-3 text-gray-400">
-                    {new Date(row.updatedAt).toLocaleString()}
-                  </td>
-                  <td className="py-2 flex gap-2">
-                    <button
-                      onClick={() => enrichRow(row.id)}
-                      disabled={isEnriching}
-                      className="px-2 py-1 text-xs bg-amber-50 hover:bg-amber-100 text-amber-700 border border-amber-200 disabled:opacity-40 rounded transition-colors"
-                    >
-                      {isEnriching ? "Running…" : "Enrich"}
-                    </button>
-                    <Link
-                      href={`/rows/${row.id}`}
-                      className="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 text-gray-600 rounded transition-colors"
-                    >
-                      Details
-                    </Link>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-
-        {visibleRows.length === 0 && (
-          <div className="text-center text-gray-400 py-12 text-sm">
-            {statusFilter ? `No rows with status "${statusFilter.replace(/_/g, " ")}".` : "No draft rows for this submission."}
-          </div>
-        )}
-      </div>
+      <DataTable
+        data={tableRows}
+        columns={columns}
+        emptyMessage={
+          statusFilter
+            ? `No rows with status "${statusFilter.replace(/_/g, " ")}".`
+            : "No draft rows for this submission."
+        }
+      />
     </div>
   );
 }

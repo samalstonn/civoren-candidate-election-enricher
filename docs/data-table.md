@@ -76,6 +76,21 @@ When `maxHeight="100%"`, DataTable switches its scroll container to `flex-1 min-
 
 The header inspects the `filterFn` identity to decide between the text input and the boolean pill. If you introduce a new filter kind, update that conditional inside `DataTable.tsx`.
 
+## Reacting to filter state from the page
+
+Pass `onFilteredRowsChange={(rows) => ...}` to receive the post-filter, post-sort row array whenever the user types in search, sets a column filter, or sorts. Used for filter-aware counts and batch actions (e.g. the "Enrich filtered (N)" button on `/candidates`).
+
+```tsx
+const [filteredRows, setFilteredRows] = useState<MyRow[]>([]);
+<DataTable
+  data={data}
+  columns={columns}
+  onFilteredRowsChange={setFilteredRows}
+/>
+```
+
+Caveat: rows passed to DataTable as `data` are what TanStack filters. If you pre-filter `data` (e.g. with a status chip applied above the table), `filteredRows` reflects the intersection. Chip counts derived from `filteredRows` collapse when a chip is active — that's expected, since the chip already narrows the view.
+
 ## Layering page-level filters
 
 `DataTable` operates on whatever array you pass as `data`. If a page has additional pre-table filters (e.g. status chips on `/candidates` and `/intake/[id]`), keep them outside the component and pass the filtered array in. Compositional, no special API needed.

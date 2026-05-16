@@ -5,31 +5,31 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import type { MatchAuditJson } from "@/types/enrichment";
 
-interface Row {
+interface Election {
+  position: string;
+  state: string;
+  city: string;
+  date: string;
+  filingAuthorityName: string | null;
+  filingAuthorityLevel: string | null;
+}
+
+interface Candidate {
   id: number;
-  submissionId: number;
-  fullNameRaw: string | null;
-  firstName: string | null;
-  lastName: string | null;
-  position: string | null;
-  municipality: string | null;
-  county: string | null;
-  state: string | null;
-  year: string | null;
+  name: string;
+  slug: string;
   email: string | null;
   phone: string | null;
-  confidence: number | null;
-  enrichmentStatus: string | null;
-  matchAuditJson: MatchAuditJson | null;
-  reviewerNotes: string | null;
-  updatedAt: string;
-  submission: {
-    id: number;
-    targetState: string | null;
-    targetCounty: string | null;
-    targetAuthorityName: string | null;
-    defaultYear: string | null;
-  };
+  bio: string | null;
+  currentRole: string | null;
+  currentCity: string | null;
+  currentState: string | null;
+  election: Election | null;
+  enrichmentRecord: {
+    enrichmentStatus: string | null;
+    matchAuditJson: MatchAuditJson | null;
+    updatedAt: string;
+  } | null;
 }
 
 const STAGES = [
@@ -56,13 +56,7 @@ const STAGE_COLORS: Record<string, string> = {
   needs_review: "bg-amber-100 text-amber-700",
 };
 
-function Section({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="border border-gray-200 rounded mb-2 bg-white">
@@ -84,6 +78,14 @@ function JsonBlock({ value }: { value: unknown }) {
   return (
     <pre className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded p-3 overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
       {JSON.stringify(value, null, 2)}
+    </pre>
+  );
+}
+
+function TextBlock({ value }: { value: string }) {
+  return (
+    <pre className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded p-3 overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
+      {value}
     </pre>
   );
 }
@@ -121,7 +123,6 @@ function RankedSourceRow({
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
           className="text-blue-400 hover:text-blue-600 shrink-0 px-1"
-          title="Open in new tab"
         >
           ↗
         </a>
@@ -139,27 +140,19 @@ function RankedSourceRow({
   );
 }
 
-function TextBlock({ value }: { value: string }) {
-  return (
-    <pre className="text-xs text-gray-700 bg-gray-50 border border-gray-100 rounded p-3 overflow-x-auto max-h-96 whitespace-pre-wrap break-all">
-      {value}
-    </pre>
-  );
-}
-
-export default function RowDetailPage() {
+export default function CandidateDetailPage() {
   const params = useParams<{ id: string }>();
-  const [row, setRow] = useState<Row | null>(null);
+  const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState<"search" | "search_general" | "search_contact" | "gemini" | "save" | "full" | null>(null);
   const [logSummary, setLogSummary] = useState<{ apiType: string; calls: number; totalTokens: number | null; totalCostUsd: number | null }[]>([]);
 
   const load = useCallback(() => {
-    fetch(`/api/rows/${params.id}`)
+    fetch(`/api/candidates/${params.id}`)
       .then((r) => r.json())
       .then((data) => {
-        setRow(data);
+        setCandidate(data);
         setLoading(false);
       })
       .catch((e) => {
@@ -178,7 +171,7 @@ export default function RowDetailPage() {
   async function runMode(mode: "search" | "search_general" | "search_contact" | "gemini" | "save" | "full") {
     setRunning(mode);
     try {
-      await fetch(`/api/rows/${params.id}/enrich`, {
+      await fetch(`/api/candidates/${params.id}/enrich`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ mode }),
@@ -191,45 +184,38 @@ export default function RowDetailPage() {
 
   if (loading) return <div className="text-gray-400 text-sm">Loading...</div>;
   if (error) return <div className="text-red-500 text-sm">Error: {error}</div>;
-  if (!row) return null;
+  if (!candidate) return null;
 
-  const audit = row.matchAuditJson;
-  const name =
-    [row.firstName, row.lastName].filter(Boolean).join(" ") ||
-    row.fullNameRaw ||
-    "Unknown";
-  const currentStatus = row.enrichmentStatus ?? "not_started";
+  const audit = candidate.enrichmentRecord?.matchAuditJson ?? null;
+  const currentStatus = candidate.enrichmentRecord?.enrichmentStatus ?? "not_started";
   const isFailed = currentStatus === "failed";
   const isRunning = running !== null;
-
   const stageIndex = STAGES.indexOf(currentStatus as (typeof STAGES)[number]);
 
   return (
     <div>
-      {/* Breadcrumb */}
       <div className="mb-1 text-xs text-gray-400">
-        <Link href="/intake" className="hover:text-gray-600">CRM Intake</Link>
+        <Link href="/candidates" className="hover:text-gray-600">Candidates</Link>
         {" / "}
-        <Link href={`/intake/${row.submissionId}`} className="hover:text-gray-600">
-          #{row.submissionId}
-        </Link>
-        {" / "}
-        Row #{row.id}
+        {candidate.name}
       </div>
 
-      {/* Header */}
       <div className="mb-6 flex items-start justify-between">
         <div>
-          <h1 className="text-lg font-bold text-gray-900">{name}</h1>
+          <h1 className="text-lg font-bold text-gray-900">{candidate.name}</h1>
           <div className="text-xs text-gray-500 mt-1 space-y-0.5">
-            {row.position && <div>{row.position}</div>}
+            {candidate.election && (
+              <div>{candidate.election.position} · {candidate.election.city}, {candidate.election.state}</div>
+            )}
+            {(candidate.email || candidate.phone) && (
+              <div>
+                {candidate.email && <span>{candidate.email}</span>}
+                {candidate.email && candidate.phone && " · "}
+                {candidate.phone && <span>{candidate.phone}</span>}
+              </div>
+            )}
             <div>
-              {[row.municipality, row.county, row.state].filter(Boolean).join(", ") || "—"}
-              {row.year ? ` · ${row.year}` : ""}
-            </div>
-            <div>
-              Row #{row.id} · Submission #{row.submissionId} ·
-              Updated {new Date(row.updatedAt).toLocaleString()}
+              ID #{candidate.id} · <a href={`https://civoren.com/candidates/${candidate.slug}`} target="_blank" rel="noopener noreferrer" className="text-amber-600 hover:underline">{candidate.slug} ↗</a>
             </div>
           </div>
         </div>
@@ -290,9 +276,7 @@ export default function RowDetailPage() {
 
       {/* Pipeline Timeline */}
       <div className="mb-6">
-        <div className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">
-          Pipeline
-        </div>
+        <div className="text-xs text-gray-400 mb-2 font-medium uppercase tracking-wider">Pipeline</div>
         <div className="flex items-center gap-1 flex-wrap">
           {STAGES.map((stage, i) => {
             const isActive = stage === currentStatus;
@@ -304,16 +288,10 @@ export default function RowDetailPage() {
               : "bg-gray-100 text-gray-300";
             return (
               <div key={stage} className="flex items-center gap-1">
-                <span
-                  className={`px-2 py-1 rounded text-xs ${cls} ${
-                    isActive ? "font-bold ring-1 ring-inset ring-current" : ""
-                  }`}
-                >
+                <span className={`px-2 py-1 rounded text-xs ${cls} ${isActive ? "font-bold ring-1 ring-inset ring-current" : ""}`}>
                   {stage.replace(/_/g, " ")}
                 </span>
-                {i < STAGES.length - 1 && (
-                  <span className="text-gray-300 text-xs">→</span>
-                )}
+                {i < STAGES.length - 1 && <span className="text-gray-300 text-xs">→</span>}
               </div>
             );
           })}
@@ -323,16 +301,10 @@ export default function RowDetailPage() {
             </span>
           )}
         </div>
-
-        {/* Timestamps */}
         {audit && (
           <div className="mt-2 text-xs text-gray-400 flex gap-4">
-            {audit.startedAt && (
-              <span>Started: {new Date(audit.startedAt).toLocaleString()}</span>
-            )}
-            {audit.completedAt && (
-              <span>Completed: {new Date(audit.completedAt).toLocaleString()}</span>
-            )}
+            {audit.startedAt && <span>Started: {new Date(audit.startedAt).toLocaleString()}</span>}
+            {audit.completedAt && <span>Completed: {new Date(audit.completedAt).toLocaleString()}</span>}
             {audit.runId && <span>Run: {audit.runId}</span>}
           </div>
         )}
@@ -341,16 +313,10 @@ export default function RowDetailPage() {
       {/* Saved Data */}
       <div className="mb-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: "Email", value: row.email },
-          { label: "Phone", value: row.phone },
-          {
-            label: "Confidence",
-            value:
-              row.confidence != null
-                ? (row.confidence * 100).toFixed(0) + "%"
-                : null,
-          },
-          { label: "Status", value: row.enrichmentStatus },
+          { label: "Email", value: candidate.email },
+          { label: "Phone", value: candidate.phone },
+          { label: "Current Role", value: candidate.currentRole },
+          { label: "Current City", value: candidate.currentCity },
         ].map(({ label, value }) => (
           <div key={label} className="bg-white border border-gray-200 rounded p-3">
             <div className="text-xs text-gray-400 mb-1">{label}</div>
@@ -359,43 +325,10 @@ export default function RowDetailPage() {
         ))}
       </div>
 
-      {row.reviewerNotes && (
+      {candidate.bio && (
         <div className="mb-4 bg-white border border-gray-200 rounded p-3">
-          <div className="text-xs text-gray-400 mb-1">Notes / Biography</div>
-          <div className="text-xs text-gray-700 whitespace-pre-wrap">
-            {row.reviewerNotes}
-          </div>
-        </div>
-      )}
-
-      {(audit?.parsedResult?.currentRole || row.position || audit?.parsedResult?.currentCity || row.state) && (
-        <div className="mb-4 grid grid-cols-2 gap-3">
-          {(audit?.parsedResult?.currentRole || row.position) && (
-            <div className="bg-white border border-gray-200 rounded p-3">
-              <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
-                Current Role
-                {!audit?.parsedResult?.currentRole && row.position && (
-                  <span className="text-gray-300 font-normal">(position fallback)</span>
-                )}
-              </div>
-              <div className="text-sm text-gray-900">
-                {audit?.parsedResult?.currentRole ?? `Candidate for ${row.position}`}
-              </div>
-            </div>
-          )}
-          {(audit?.parsedResult?.currentCity || row.state) && (
-            <div className="bg-white border border-gray-200 rounded p-3">
-              <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
-                Location
-                {!audit?.parsedResult?.currentCity && row.state && (
-                  <span className="text-gray-300 font-normal">(state fallback)</span>
-                )}
-              </div>
-              <div className="text-sm text-gray-900">
-                {audit?.parsedResult?.currentCity ?? row.state}
-              </div>
-            </div>
-          )}
+          <div className="text-xs text-gray-400 mb-1">Bio</div>
+          <div className="text-xs text-gray-700 whitespace-pre-wrap">{candidate.bio}</div>
         </div>
       )}
 
@@ -415,11 +348,9 @@ export default function RowDetailPage() {
         </div>
       )}
 
-      {/* Debug Sections */}
+      {/* Pipeline Artifacts */}
       <div className="mt-6">
-        <div className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wider">
-          Pipeline Artifacts
-        </div>
+        <div className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wider">Pipeline Artifacts</div>
 
         {audit?.searchQuery && (
           <Section title="Search Queries">
@@ -469,20 +400,14 @@ export default function RowDetailPage() {
                     <span className="text-xs text-amber-700 font-medium">{s.title}</span>
                     {s.sourceQuery && (
                       <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        s.sourceQuery === "contact"
-                          ? "bg-blue-50 text-blue-600"
-                          : "bg-gray-100 text-gray-500"
+                        s.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
                       }`}>
                         {s.sourceQuery}
                       </span>
                     )}
                   </div>
-                  <div className="text-xs text-blue-600 mb-2 break-all">
-                    {s.url}
-                  </div>
-                  <div className="text-xs text-gray-500 line-clamp-4">
-                    {s.content}
-                  </div>
+                  <div className="text-xs text-blue-600 mb-2 break-all">{s.url}</div>
+                  <div className="text-xs text-gray-500 line-clamp-4">{s.content}</div>
                 </div>
               ))}
             </div>
@@ -522,11 +447,7 @@ export default function RowDetailPage() {
                 const timestamp = isLegacy ? null : e.timestamp;
                 return (
                   <div key={i} className="text-xs text-red-600 bg-red-50 border border-red-100 rounded p-2">
-                    {timestamp && (
-                      <div className="text-red-400 mb-0.5">
-                        {new Date(timestamp).toLocaleString()}
-                      </div>
-                    )}
+                    {timestamp && <div className="text-red-400 mb-0.5">{new Date(timestamp).toLocaleString()}</div>}
                     {message}
                   </div>
                 );
@@ -537,7 +458,7 @@ export default function RowDetailPage() {
 
         {!audit && (
           <div className="text-xs text-gray-400 py-8 text-center">
-            No pipeline run yet. Click Re-run Enrichment to start.
+            No pipeline run yet. Click Run Full to start.
           </div>
         )}
       </div>

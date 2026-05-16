@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { createColumnHelper, type ColumnDef } from "@tanstack/react-table";
+import { DataTable, numberFilter } from "@/components/DataTable";
 
 interface LogEntry {
   id: number;
@@ -22,6 +24,143 @@ interface LogEntry {
 }
 
 const PAGE_SIZE = 50;
+
+const columnHelper = createColumnHelper<LogEntry>();
+
+const columns: ColumnDef<LogEntry, any>[] = [
+  columnHelper.accessor("createdAt", {
+    header: "Time",
+    cell: (info) => (
+      <span className="text-gray-400 whitespace-nowrap">
+        {new Date(info.getValue()).toLocaleString()}
+      </span>
+    ),
+    enableColumnFilter: false,
+    sortingFn: "datetime",
+  }),
+  columnHelper.accessor("apiType", {
+    header: "Type",
+    cell: (info) => {
+      const v = info.getValue();
+      return (
+        <span
+          className={`px-1.5 py-0.5 rounded font-medium ${
+            v === "gemini"
+              ? "bg-purple-50 text-purple-700"
+              : "bg-blue-50 text-blue-700"
+          }`}
+        >
+          {v}
+        </span>
+      );
+    },
+    filterFn: "includesString",
+  }),
+  columnHelper.display({
+    id: "rowOrSub",
+    header: "Row / Sub",
+    cell: ({ row }) => {
+      const log = row.original;
+      if (!log.rowId && !log.submissionId)
+        return <span className="text-gray-300">—</span>;
+      return (
+        <span className="text-gray-500">
+          {log.rowId && (
+            <Link
+              href={`/rows/${log.rowId}`}
+              className="text-blue-500 hover:underline"
+            >
+              row {log.rowId}
+            </Link>
+          )}
+          {log.rowId && log.submissionId && " · "}
+          {log.submissionId && (
+            <Link
+              href={`/intake/${log.submissionId}`}
+              className="text-blue-500 hover:underline"
+            >
+              sub {log.submissionId}
+            </Link>
+          )}
+        </span>
+      );
+    },
+    enableColumnFilter: false,
+    enableSorting: false,
+  }),
+  columnHelper.accessor(
+    (log) => (log.apiType === "gemini" ? log.model : log.query) ?? "",
+    {
+      id: "detail",
+      header: "Detail",
+      cell: (info) => {
+        const v = info.getValue();
+        return (
+          <span className="text-gray-600 max-w-xs truncate inline-block align-bottom">
+            {v ? v : <span className="text-gray-300">—</span>}
+          </span>
+        );
+      },
+      filterFn: "includesString",
+    }
+  ),
+  columnHelper.accessor("totalTokens", {
+    header: "Tokens",
+    cell: ({ row }) => {
+      const log = row.original;
+      if (log.totalTokens == null) return <span className="text-gray-300">—</span>;
+      return (
+        <span
+          className="text-gray-500 tabular-nums"
+          title={`${log.promptTokens ?? 0} in / ${log.outputTokens ?? 0} out`}
+        >
+          {log.totalTokens.toLocaleString()}
+        </span>
+      );
+    },
+    filterFn: numberFilter,
+  }),
+  columnHelper.accessor("latencyMs", {
+    header: "Latency",
+    cell: (info) => {
+      const v = info.getValue();
+      return v != null ? (
+        <span className="text-gray-500 tabular-nums">{(v / 1000).toFixed(1)}s</span>
+      ) : (
+        <span className="text-gray-300">—</span>
+      );
+    },
+    filterFn: numberFilter,
+  }),
+  columnHelper.accessor("costUsd", {
+    header: "Cost",
+    cell: (info) => {
+      const v = info.getValue();
+      return v != null ? (
+        <span className="text-gray-700 font-medium tabular-nums">
+          ${v.toFixed(4)}
+        </span>
+      ) : (
+        <span className="text-gray-300">—</span>
+      );
+    },
+    filterFn: numberFilter,
+  }),
+  columnHelper.accessor("status", {
+    header: "Status",
+    cell: ({ row }) => {
+      const log = row.original;
+      return log.status === "success" ? (
+        <span className="text-green-500">✓</span>
+      ) : (
+        <span className="text-red-500" title={log.error ?? ""}>
+          ✗
+        </span>
+      );
+    },
+    filterFn: "includesString",
+  }),
+];
 
 export default function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -46,7 +185,9 @@ export default function LogsPage() {
       .finally(() => setLoading(false));
   }, [page, apiType]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
   const totalCost = logs.reduce((sum, l) => sum + (l.costUsd ?? 0), 0);
@@ -55,15 +196,19 @@ export default function LogsPage() {
     <div>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-lg font-bold text-gray-900">API Call Logs</h1>
-        <div className="text-xs text-gray-400">{total.toLocaleString()} total entries</div>
+        <div className="text-xs text-gray-400">
+          {total.toLocaleString()} total entries
+        </div>
       </div>
 
-      {/* Filter bar */}
       <div className="flex gap-2 mb-4">
         {(["", "gemini", "tavily"] as const).map((t) => (
           <button
             key={t}
-            onClick={() => { setApiType(t); setPage(1); }}
+            onClick={() => {
+              setApiType(t);
+              setPage(1);
+            }}
             className={`text-xs px-3 py-1.5 rounded border font-medium transition-colors ${
               apiType === t
                 ? "bg-gray-900 text-white border-gray-900"
@@ -74,90 +219,24 @@ export default function LogsPage() {
           </button>
         ))}
         <div className="ml-auto text-xs text-gray-400 flex items-center">
-          Page cost: <span className="text-gray-700 font-medium ml-1">${totalCost.toFixed(4)}</span>
+          Page cost:{" "}
+          <span className="text-gray-700 font-medium ml-1">
+            ${totalCost.toFixed(4)}
+          </span>
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white border border-gray-200 rounded overflow-hidden">
-        <table className="w-full text-xs">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="text-left px-3 py-2 text-gray-500 font-medium">Time</th>
-              <th className="text-left px-3 py-2 text-gray-500 font-medium">Type</th>
-              <th className="text-left px-3 py-2 text-gray-500 font-medium">Row / Sub</th>
-              <th className="text-left px-3 py-2 text-gray-500 font-medium">Detail</th>
-              <th className="text-right px-3 py-2 text-gray-500 font-medium">Tokens</th>
-              <th className="text-right px-3 py-2 text-gray-500 font-medium">Latency</th>
-              <th className="text-right px-3 py-2 text-gray-500 font-medium">Cost</th>
-              <th className="text-center px-3 py-2 text-gray-500 font-medium">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-50">
-            {loading ? (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">Loading…</td></tr>
-            ) : logs.length === 0 ? (
-              <tr><td colSpan={8} className="px-3 py-8 text-center text-gray-400">No logs yet.</td></tr>
-            ) : logs.map((log) => (
-              <tr key={log.id} className="hover:bg-gray-50">
-                <td className="px-3 py-2 text-gray-400 whitespace-nowrap">
-                  {new Date(log.createdAt).toLocaleString()}
-                </td>
-                <td className="px-3 py-2">
-                  <span className={`px-1.5 py-0.5 rounded font-medium ${
-                    log.apiType === "gemini"
-                      ? "bg-purple-50 text-purple-700"
-                      : "bg-blue-50 text-blue-700"
-                  }`}>
-                    {log.apiType}
-                  </span>
-                </td>
-                <td className="px-3 py-2 text-gray-500">
-                  {log.rowId && (
-                    <Link href={`/rows/${log.rowId}`} className="text-blue-500 hover:underline">
-                      row {log.rowId}
-                    </Link>
-                  )}
-                  {log.rowId && log.submissionId && " · "}
-                  {log.submissionId && (
-                    <Link href={`/submissions/${log.submissionId}`} className="text-blue-500 hover:underline">
-                      sub {log.submissionId}
-                    </Link>
-                  )}
-                  {!log.rowId && !log.submissionId && "—"}
-                </td>
-                <td className="px-3 py-2 text-gray-600 max-w-xs truncate">
-                  {log.apiType === "gemini"
-                    ? log.model
-                    : log.query}
-                </td>
-                <td className="px-3 py-2 text-right text-gray-500">
-                  {log.totalTokens != null ? (
-                    <span title={`${log.promptTokens ?? 0} in / ${log.outputTokens ?? 0} out`}>
-                      {log.totalTokens.toLocaleString()}
-                    </span>
-                  ) : "—"}
-                </td>
-                <td className="px-3 py-2 text-right text-gray-500">
-                  {log.latencyMs != null ? `${(log.latencyMs / 1000).toFixed(1)}s` : "—"}
-                </td>
-                <td className="px-3 py-2 text-right text-gray-700 font-medium">
-                  {log.costUsd != null ? `$${log.costUsd.toFixed(4)}` : "—"}
-                </td>
-                <td className="px-3 py-2 text-center">
-                  {log.status === "success" ? (
-                    <span className="text-green-500">✓</span>
-                  ) : (
-                    <span className="text-red-500" title={log.error ?? ""}>✗</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {loading ? (
+        <div className="text-gray-400 text-sm py-8 text-center">Loading…</div>
+      ) : (
+        <DataTable
+          data={logs}
+          columns={columns}
+          emptyMessage="No logs yet."
+          searchPlaceholder="Search this page…"
+        />
+      )}
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex justify-between items-center mt-4 text-xs text-gray-500">
           <button
@@ -167,7 +246,9 @@ export default function LogsPage() {
           >
             Previous
           </button>
-          <span>Page {page} of {totalPages}</span>
+          <span>
+            Page {page} of {totalPages}
+          </span>
           <button
             onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
             disabled={page === totalPages}

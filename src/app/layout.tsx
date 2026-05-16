@@ -21,7 +21,8 @@ export default function RootLayout({
           </span>
           <span className="text-gray-400 text-xs">private</span>
           <nav className="ml-6 flex gap-4">
-            <Link href="/submissions" className="text-xs text-gray-500 hover:text-gray-900">Submissions</Link>
+            <Link href="/intake" className="text-xs text-gray-500 hover:text-gray-900">CRM Intake</Link>
+            <Link href="/candidates" className="text-xs text-gray-500 hover:text-gray-900">Candidates</Link>
             <Link href="/logs" className="text-xs text-gray-500 hover:text-gray-900">Logs</Link>
           </nav>
         </header>
