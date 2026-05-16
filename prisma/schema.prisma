@@ -9,6 +9,19 @@ datasource db {
   shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
+model EnrichmentRecord {
+  id               Int      @id @default(autoincrement())
+  entityType       String
+  entityId         Int
+  enrichmentStatus String?
+  matchAuditJson   Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([entityType, entityId])
+  @@index([entityType, entityId])
+}
+
 model Election {
   id                   Int                      @id @default(autoincrement())
   position             String
@@ -21,6 +34,7 @@ model Election {
   positions            Int
   state                String
   type                 ElectionType
+  cycle                ElectionCycle             @default(NOT_SET)
   hidden               Boolean                  @default(false)
   called               Boolean                  @default(false)
   uploadedBy           String                   @default("team@elevracommunity.com")
@@ -442,29 +456,44 @@ model CandidateSubmission {
 }
 
 model Vendor {
-  id                Int               @id @default(autoincrement())
+  id                Int                  @id @default(autoincrement())
   name              String
   bio               String
   website           String?
   email             String
   phone             String?
-  city              String
-  state             String
-  subscription      VendorTier        @default(FREE)
-  clerkUserId       String            @unique
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
-  status            SubmissionStatus  @default(PENDING)
-  verified          Boolean           @default(false)
+  addressLine       String?
+  city              String?
+  state             String?
+  country           String?
+  subscription      VendorTier           @default(FREE)
+  clerkUserId       String               @unique
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  status            SubmissionStatus     @default(PENDING)
+  verified          Boolean              @default(false)
   latitude          Float?
   longitude         Float?
   photoUrl          String?
-  slug              String            @unique
-  hidden            Boolean           @default(false)
+  serviceMode       ServiceMode          @default(IN_PERSON)
+  laborStatus       LaborStatus          @default(UNLISTED)
+  slug              String               @unique
+  hidden            Boolean              @default(false)
   portfolio         PortfolioItem[]
   testimonials      Testimonial[]
-  candidate         Candidate[]       @relation("CandidateToVendor")
-  serviceCategories ServiceCategory[] @relation("VendorServices")
+  candidate         Candidate[]          @relation("CandidateToVendor")
+  serviceCategories ServiceCategory[]    @relation("VendorServices")
+  profileViews      VendorProfileView[]
+}
+
+model VendorProfileView {
+  id        Int      @id @default(autoincrement())
+  vendorId  Int
+  viewedAt  DateTime @default(now())
+  viewerIp  String?
+  userAgent String?
+  referrerUrl String?
+  vendor    Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 }
 
 model ServiceCategory {
@@ -856,10 +885,30 @@ enum ElectionType {
   TEST
 }
 
+enum ElectionCycle {
+  NOT_SET
+  PRIMARY
+  GENERAL
+  SPECIAL
+  RUNOFF
+}
+
 enum VendorTier {
   FREE
   STANDARD
   PREMIUM
+}
+
+enum ServiceMode {
+  IN_PERSON
+  REMOTE
+  HYBRID
+}
+
+enum LaborStatus {
+  UNION
+  UNION_FRIENDLY
+  UNLISTED
 }
 
 enum SubmissionStatus {
@@ -880,11 +929,11 @@ enum CandidateAccountUserStatus {
 }
 
 enum ServiceCategoryType {
-  CREATIVE_BRANDING
-  DIGITAL_TECH
-  PHYSICAL_MEDIA
-  CONSULTING_PR
-  OTHER
+  PRINTING_MAIL_SIGNS
+  PHOTOGRAPHY_VIDEO
+  DATA_VOTER_STRATEGY
+  CONSULTING
+  COMPLIANCE_TREASURER
 }
 
 enum BlogStatus {
