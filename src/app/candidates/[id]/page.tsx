@@ -12,6 +12,7 @@ interface Election {
   date: string;
   filingAuthorityName: string | null;
   filingAuthorityLevel: string | null;
+  party: string | null;
 }
 
 interface Candidate {
@@ -24,6 +25,8 @@ interface Candidate {
   currentRole: string | null;
   currentCity: string | null;
   currentState: string | null;
+  linkedin: string | null;
+  website: string | null;
   election: Election | null;
   enrichmentRecord: {
     enrichmentStatus: string | null;
@@ -109,9 +112,8 @@ function RankedSourceRow({
         <span className="text-gray-300 w-5 text-right shrink-0">{rank}</span>
         <span className="font-mono text-gray-500 w-10 shrink-0">{source.score.toFixed(2)}</span>
         {source.sourceQuery && (
-          <span className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${
-            source.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
-          }`}>
+          <span className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${source.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
+            }`}>
             {source.sourceQuery}
           </span>
         )}
@@ -284,8 +286,8 @@ export default function CandidateDetailPage() {
             const cls = isActive
               ? STAGE_COLORS[stage] ?? "bg-gray-100 text-gray-500"
               : isPast
-              ? "bg-gray-200 text-gray-600"
-              : "bg-gray-100 text-gray-300";
+                ? "bg-gray-200 text-gray-600"
+                : "bg-gray-100 text-gray-300";
             return (
               <div key={stage} className="flex items-center gap-1">
                 <span className={`px-2 py-1 rounded text-xs ${cls} ${isActive ? "font-bold ring-1 ring-inset ring-current" : ""}`}>
@@ -315,12 +317,33 @@ export default function CandidateDetailPage() {
         {[
           { label: "Email", value: candidate.email },
           { label: "Phone", value: candidate.phone },
+          { label: "LinkedIn", value: candidate.linkedin, href: candidate.linkedin },
+          { label: "Website", value: candidate.website, href: candidate.website },
           { label: "Current Role", value: candidate.currentRole },
           { label: "Current City", value: candidate.currentCity },
-        ].map(({ label, value }) => (
+          { label: "Current State", value: candidate.currentState },
+          { label: "Party", value: candidate.election?.party ?? null },
+        ].map(({ label, value, href }) => (
           <div key={label} className="bg-white border border-gray-200 rounded p-3">
             <div className="text-xs text-gray-400 mb-1">{label}</div>
-            <div className="text-sm text-gray-900">{value ?? "—"}</div>
+            <div className="text-sm text-gray-900 truncate" title={value ?? undefined}>
+              {value ? (
+                href ? (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-amber-600 hover:underline"
+                  >
+                    {value.replace(/^https?:\/\/(www\.)?/, "")}
+                  </a>
+                ) : (
+                  value
+                )
+              ) : (
+                "—"
+              )}
+            </div>
           </div>
         ))}
       </div>
@@ -399,9 +422,8 @@ export default function CandidateDetailPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs text-amber-700 font-medium">{s.title}</span>
                     {s.sourceQuery && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        s.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
-                      }`}>
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
+                        }`}>
                         {s.sourceQuery}
                       </span>
                     )}

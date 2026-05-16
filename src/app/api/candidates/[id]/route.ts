@@ -23,9 +23,12 @@ export async function GET(
       currentRole: true,
       currentCity: true,
       currentState: true,
+      linkedin: true,
+      website: true,
       elections: {
         where: { archived: false },
-        include: {
+        select: {
+          party: true,
           election: {
             select: {
               position: true,
@@ -64,6 +67,8 @@ export async function GET(
     currentRole: candidate.currentRole,
     currentCity: candidate.currentCity,
     currentState: candidate.currentState,
+    linkedin: candidate.linkedin,
+    website: candidate.website,
     election: electionLink
       ? {
           position: electionLink.election.position,
@@ -72,6 +77,7 @@ export async function GET(
           date: electionLink.election.date.toISOString(),
           filingAuthorityName: electionLink.election.filingAuthorityName,
           filingAuthorityLevel: electionLink.election.filingAuthorityLevel,
+          party: electionLink.party,
         }
       : null,
     enrichmentRecord: enrichmentRecord
