@@ -1,6 +1,6 @@
-# Candidate Enrichment Console
+# Candidate Civoren Console
 
-Private internal tool for enriching CRM intake candidate records. Connects to the parent app's PostgreSQL database and runs a search → Gemini pipeline on `CrmIntakeDraftRow` records, with full pipeline visibility at every stage.
+Civoren Console internal tool for enriching CRM intake candidate records. Connects to the parent app's PostgreSQL database and runs a search → Gemini pipeline on `CrmIntakeDraftRow` records, with full pipeline visibility at every stage.
 
 ## What it does
 

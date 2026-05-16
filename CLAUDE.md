@@ -10,7 +10,7 @@ After any change that affects architecture, pipeline behavior, API routes, adapt
 
 ## What This Is
 
-A private internal Next.js 15 App Router console for enriching election candidate records with biographical data, contact info, and confidence scores. It connects to the parent Civoren app's PostgreSQL database (shared Prisma schema) and runs a Tavily search → Gemini AI pipeline with a full audit trail.
+A Civoren Console internal Next.js 15 App Router console for enriching election candidate records with biographical data, contact info, and confidence scores. It connects to the parent Civoren app's PostgreSQL database (shared Prisma schema) and runs a Tavily search → Gemini AI pipeline with a full audit trail.
 
 Two entity types are supported: **CRM intake draft rows** and **live election candidates**.
 

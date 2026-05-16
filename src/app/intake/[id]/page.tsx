@@ -338,7 +338,7 @@ export default function IntakeDetailPage() {
     <div>
       <div className="mb-1 text-xs text-gray-400">
         <Link href="/intake" className="hover:text-gray-600">
-          CRM Intake
+          Pending Candidates
         </Link>{" "}
         / #{submission.id}
       </div>
@@ -455,11 +455,10 @@ export default function IntakeDetailPage() {
       <div className="flex flex-wrap gap-1.5 mb-3">
         <button
           onClick={() => setStatusFilter(null)}
-          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
-            statusFilter === null
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${statusFilter === null
               ? "bg-gray-800 text-white border-gray-800"
               : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
-          }`}
+            }`}
         >
           All ({rows.length})
         </button>

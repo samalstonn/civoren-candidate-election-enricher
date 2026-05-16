@@ -182,7 +182,7 @@ export default function IntakePage() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-lg font-bold text-gray-900">CRM Intake</h1>
+        <h1 className="text-lg font-bold text-gray-900">Pending Candidates</h1>
         <p className="text-gray-400 text-xs mt-1">{submissions.length} total</p>
       </div>
 

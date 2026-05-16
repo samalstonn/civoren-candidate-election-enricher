@@ -38,7 +38,7 @@ export default function DashboardPage() {
         );
         setIntake({ ...totals, total: submissions.length });
       })
-      .catch(() => {});
+      .catch(() => { });
 
     fetch("/api/candidates")
       .then((r) => r.json())
@@ -50,13 +50,13 @@ export default function DashboardPage() {
           failed: list.filter((c) => c.enrichmentStatus === "failed").length,
         });
       })
-      .catch(() => {});
+      .catch(() => { });
   }, []);
 
   return (
     <div>
       <div className="mb-8">
-        <h1 className="text-lg font-bold text-gray-900">Enrichment Console</h1>
+        <h1 className="text-lg font-bold text-gray-900">Civoren Console</h1>
         <p className="text-xs text-gray-400 mt-1">Select an entity type to enrich</p>
       </div>
 

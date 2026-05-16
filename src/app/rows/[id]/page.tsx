@@ -107,9 +107,8 @@ function RankedSourceRow({
         <span className="text-gray-300 w-5 text-right shrink-0">{rank}</span>
         <span className="font-mono text-gray-500 w-10 shrink-0">{source.score.toFixed(2)}</span>
         {source.sourceQuery && (
-          <span className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${
-            source.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
-          }`}>
+          <span className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${source.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
+            }`}>
             {source.sourceQuery}
           </span>
         )}
@@ -208,7 +207,7 @@ export default function RowDetailPage() {
     <div>
       {/* Breadcrumb */}
       <div className="mb-1 text-xs text-gray-400">
-        <Link href="/intake" className="hover:text-gray-600">CRM Intake</Link>
+        <Link href="/intake" className="hover:text-gray-600">Pending Candidates</Link>
         {" / "}
         <Link href={`/intake/${row.submissionId}`} className="hover:text-gray-600">
           #{row.submissionId}
@@ -300,14 +299,13 @@ export default function RowDetailPage() {
             const cls = isActive
               ? STAGE_COLORS[stage] ?? "bg-gray-100 text-gray-500"
               : isPast
-              ? "bg-gray-200 text-gray-600"
-              : "bg-gray-100 text-gray-300";
+                ? "bg-gray-200 text-gray-600"
+                : "bg-gray-100 text-gray-300";
             return (
               <div key={stage} className="flex items-center gap-1">
                 <span
-                  className={`px-2 py-1 rounded text-xs ${cls} ${
-                    isActive ? "font-bold ring-1 ring-inset ring-current" : ""
-                  }`}
+                  className={`px-2 py-1 rounded text-xs ${cls} ${isActive ? "font-bold ring-1 ring-inset ring-current" : ""
+                    }`}
                 >
                   {stage.replace(/_/g, " ")}
                 </span>
@@ -468,11 +466,10 @@ export default function RowDetailPage() {
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs text-amber-700 font-medium">{s.title}</span>
                     {s.sourceQuery && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        s.sourceQuery === "contact"
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.sourceQuery === "contact"
                           ? "bg-blue-50 text-blue-600"
                           : "bg-gray-100 text-gray-500"
-                      }`}>
+                        }`}>
                         {s.sourceQuery}
                       </span>
                     )}
