@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { runEnrichmentPipeline, type PipelineMode } from "@/lib/enrichment/pipeline";
+import {
+  runEnrichmentPipeline,
+  normalizePipelineMode,
+} from "@/lib/enrichment/pipeline";
 import { CandidateIntakeAdapter } from "@/lib/enrichment/adapters/candidate-intake";
-
-const VALID_MODES: PipelineMode[] = ["search", "search_general", "search_contact", "gemini", "save", "full"];
 
 export async function POST(
   req: Request,
@@ -14,20 +15,25 @@ export async function POST(
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
 
-  let mode: PipelineMode = "full";
+  let rawMode = "full";
   try {
     const body = await req.json();
-    if (body?.mode && VALID_MODES.includes(body.mode)) {
-      mode = body.mode;
-    }
+    if (typeof body?.mode === "string") rawMode = body.mode;
   } catch {
     // no body or invalid JSON — use default
   }
 
+  const modes = normalizePipelineMode(rawMode);
+  if (modes.length === 0) {
+    return NextResponse.json({ error: `Unknown mode: ${rawMode}` }, { status: 400 });
+  }
+
   try {
     const adapter = await CandidateIntakeAdapter.create(rowId);
-    await runEnrichmentPipeline(adapter, mode);
-    return NextResponse.json({ success: true, rowId, mode });
+    for (const mode of modes) {
+      await runEnrichmentPipeline(adapter, mode);
+    }
+    return NextResponse.json({ success: true, rowId, modes });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

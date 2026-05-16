@@ -93,7 +93,7 @@ function RankedSourceRow({
   rank,
   selected,
 }: {
-  source: { url: string; title: string; sourceQuery?: "general" | "contact"; score: number; content: string };
+  source: { url: string; title: string; score: number; content: string };
   rank: number;
   selected: boolean;
 }) {
@@ -106,12 +106,6 @@ function RankedSourceRow({
       >
         <span className="text-gray-300 w-5 text-right shrink-0">{rank}</span>
         <span className="font-mono text-gray-500 w-10 shrink-0">{source.score.toFixed(2)}</span>
-        {source.sourceQuery && (
-          <span className={`px-1.5 py-0.5 rounded font-medium shrink-0 ${source.sourceQuery === "contact" ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-500"
-            }`}>
-            {source.sourceQuery}
-          </span>
-        )}
         <span className="text-gray-600 truncate flex-1">{source.url}</span>
         {selected && <span className="text-green-500 shrink-0 font-medium">✓</span>}
         <a
@@ -193,6 +187,17 @@ export default function RowDetailPage() {
   if (!row) return null;
 
   const audit = row.matchAuditJson;
+  const general = audit?.general;
+  const contact = audit?.contact;
+  // Intake page renders the general track as primary; fall back to contact for
+  // legacy intake rows where parsedResult might have lived under contact.
+  const generalParsed = general?.parsedResult as
+    | {
+        biography?: string;
+        currentRole?: string | null;
+        currentCity?: string | null;
+      }
+    | undefined;
   const name =
     [row.firstName, row.lastName].filter(Boolean).join(" ") ||
     row.fullNameRaw ||
@@ -262,16 +267,16 @@ export default function RowDetailPage() {
             </div>
             <button
               onClick={() => runMode("gemini")}
-              disabled={isRunning || !audit?.selectedSources?.length}
-              title={!audit?.selectedSources?.length ? "Run Search first" : undefined}
+              disabled={isRunning || !(general?.selectedSources?.length || contact?.selectedSources?.length)}
+              title={!(general?.selectedSources?.length || contact?.selectedSources?.length) ? "Run Search first" : undefined}
               className="text-xs px-3 py-2 bg-purple-50 hover:bg-purple-100 disabled:opacity-40 disabled:cursor-not-allowed text-purple-700 font-medium rounded border border-purple-200 transition-colors"
             >
               {running === "gemini" ? "Running..." : "Run Gemini"}
             </button>
             <button
               onClick={() => runMode("save")}
-              disabled={isRunning || !audit?.parsedResult}
-              title={!audit?.parsedResult ? "Run Gemini first" : undefined}
+              disabled={isRunning || !(general?.parsedResult || contact?.parsedResult)}
+              title={!(general?.parsedResult || contact?.parsedResult) ? "Run Gemini first" : undefined}
               className="text-xs px-3 py-2 bg-green-50 hover:bg-green-100 disabled:opacity-40 disabled:cursor-not-allowed text-green-700 font-medium rounded border border-green-200 transition-colors"
             >
               {running === "save" ? "Saving..." : "Save Result"}
@@ -366,31 +371,31 @@ export default function RowDetailPage() {
         </div>
       )}
 
-      {(audit?.parsedResult?.currentRole || row.position || audit?.parsedResult?.currentCity || row.state) && (
+      {(generalParsed?.currentRole || row.position || generalParsed?.currentCity || row.state) && (
         <div className="mb-4 grid grid-cols-2 gap-3">
-          {(audit?.parsedResult?.currentRole || row.position) && (
+          {(generalParsed?.currentRole || row.position) && (
             <div className="bg-white border border-gray-200 rounded p-3">
               <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
                 Current Role
-                {!audit?.parsedResult?.currentRole && row.position && (
+                {!generalParsed?.currentRole && row.position && (
                   <span className="text-gray-300 font-normal">(position fallback)</span>
                 )}
               </div>
               <div className="text-sm text-gray-900">
-                {audit?.parsedResult?.currentRole ?? `Candidate for ${row.position}`}
+                {generalParsed?.currentRole ?? `Candidate for ${row.position}`}
               </div>
             </div>
           )}
-          {(audit?.parsedResult?.currentCity || row.state) && (
+          {(generalParsed?.currentCity || row.state) && (
             <div className="bg-white border border-gray-200 rounded p-3">
               <div className="text-xs text-gray-400 mb-1 flex items-center gap-1.5">
                 Location
-                {!audit?.parsedResult?.currentCity && row.state && (
+                {!generalParsed?.currentCity && row.state && (
                   <span className="text-gray-300 font-normal">(state fallback)</span>
                 )}
               </div>
               <div className="text-sm text-gray-900">
-                {audit?.parsedResult?.currentCity ?? row.state}
+                {generalParsed?.currentCity ?? row.state}
               </div>
             </div>
           )}
@@ -419,94 +424,130 @@ export default function RowDetailPage() {
           Pipeline Artifacts
         </div>
 
-        {audit?.searchQuery && (
+        {(general?.searchQuery || contact?.searchQuery) && (
           <Section title="Search Queries">
             <div className="space-y-2">
-              <div>
-                <div className="text-xs text-gray-400 mb-1">General</div>
-                <TextBlock value={audit.searchQuery} />
-              </div>
-              {audit.contactSearchQuery && (
+              {general?.searchQuery && (
+                <div>
+                  <div className="text-xs text-gray-400 mb-1">General</div>
+                  <TextBlock value={general.searchQuery} />
+                </div>
+              )}
+              {contact?.searchQuery && (
                 <div>
                   <div className="text-xs text-gray-400 mb-1">Contact</div>
-                  <TextBlock value={audit.contactSearchQuery} />
+                  <TextBlock value={contact.searchQuery} />
                 </div>
               )}
             </div>
           </Section>
         )}
 
-        {audit?.searchRawResponse !== undefined && (
+        {general?.searchRawResponse !== undefined && (
           <Section title="Search Raw Response — General (Tavily)">
-            <JsonBlock value={audit.searchRawResponse} />
+            <JsonBlock value={general.searchRawResponse} />
           </Section>
         )}
 
-        {audit?.contactSearchRawResponse !== undefined && (
+        {contact?.searchRawResponse !== undefined && (
           <Section title="Search Raw Response — Contact (Tavily)">
-            <JsonBlock value={audit.contactSearchRawResponse} />
+            <JsonBlock value={contact.searchRawResponse} />
           </Section>
         )}
 
-        {audit?.rankedSources && audit.rankedSources.length > 0 && (
-          <Section title={`All Ranked Sources (${audit.rankedSources.length})`}>
+        {general?.rankedSources && general.rankedSources.length > 0 && (
+          <Section title={`General — Ranked Sources (${general.rankedSources.length})`}>
             <div className="space-y-0.5">
-              {audit.rankedSources.map((s, i) => (
+              {general.rankedSources.map((s, i) => (
                 <RankedSourceRow key={i} source={s} rank={i + 1} selected={i < 5} />
               ))}
             </div>
           </Section>
         )}
 
-        {audit?.selectedSources && audit.selectedSources.length > 0 && (
-          <Section title={`Selected Sources (${audit.selectedSources.length})`}>
+        {contact?.rankedSources && contact.rankedSources.length > 0 && (
+          <Section title={`Contact — Ranked Sources (${contact.rankedSources.length})`}>
+            <div className="space-y-0.5">
+              {contact.rankedSources.map((s, i) => (
+                <RankedSourceRow key={i} source={s} rank={i + 1} selected={i < 5} />
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {((general?.selectedSources?.length ?? 0) > 0 || (contact?.selectedSources?.length ?? 0) > 0) && (
+          <Section title={`Selected Sources (${(general?.selectedSources?.length ?? 0) + (contact?.selectedSources?.length ?? 0)})`}>
             <div className="space-y-3">
-              {audit.selectedSources.map((s, i) => (
+              {[
+                ...(general?.selectedSources ?? []).map((s) => ({ s, track: "general" as const })),
+                ...(contact?.selectedSources ?? []).map((s) => ({ s, track: "contact" as const })),
+              ].map(({ s, track }, i) => (
                 <div key={i} className="bg-gray-50 border border-gray-100 rounded p-3">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="text-xs text-amber-700 font-medium">{s.title}</span>
-                    {s.sourceQuery && (
-                      <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${s.sourceQuery === "contact"
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                        track === "contact"
                           ? "bg-blue-50 text-blue-600"
                           : "bg-gray-100 text-gray-500"
-                        }`}>
-                        {s.sourceQuery}
-                      </span>
-                    )}
+                      }`}
+                    >
+                      {track}
+                    </span>
                   </div>
-                  <div className="text-xs text-blue-600 mb-2 break-all">
-                    {s.url}
-                  </div>
-                  <div className="text-xs text-gray-500 line-clamp-4">
-                    {s.content}
-                  </div>
+                  <div className="text-xs text-blue-600 mb-2 break-all">{s.url}</div>
+                  <div className="text-xs text-gray-500 line-clamp-4">{s.content}</div>
                 </div>
               ))}
             </div>
           </Section>
         )}
 
-        {audit?.geminiPrompt && (
-          <Section title="Gemini Prompt (Input)">
-            <TextBlock value={audit.geminiPrompt} />
+        {general?.geminiPrompt && (
+          <Section title="Gemini Prompt — General">
+            <TextBlock value={general.geminiPrompt} />
           </Section>
         )}
 
-        {audit?.geminiRawResponse && (
-          <Section title="Gemini Raw Response">
-            <TextBlock value={audit.geminiRawResponse} />
+        {contact?.geminiPrompt && (
+          <Section title="Gemini Prompt — Contact">
+            <TextBlock value={contact.geminiPrompt} />
           </Section>
         )}
 
-        {audit?.parsedResult && (
-          <Section title="Parsed Result">
-            <JsonBlock value={audit.parsedResult} />
+        {general?.geminiRawResponse && (
+          <Section title="Gemini Raw Response — General">
+            <TextBlock value={general.geminiRawResponse} />
           </Section>
         )}
 
-        {audit?.finalSavedFields && (
-          <Section title="Saved Fields">
-            <JsonBlock value={audit.finalSavedFields} />
+        {contact?.geminiRawResponse && (
+          <Section title="Gemini Raw Response — Contact">
+            <TextBlock value={contact.geminiRawResponse} />
+          </Section>
+        )}
+
+        {general?.parsedResult && (
+          <Section title="Parsed Result — General">
+            <JsonBlock value={general.parsedResult} />
+          </Section>
+        )}
+
+        {contact?.parsedResult && (
+          <Section title="Parsed Result — Contact">
+            <JsonBlock value={contact.parsedResult} />
+          </Section>
+        )}
+
+        {general?.finalSavedFields && (
+          <Section title="Saved Fields — General">
+            <JsonBlock value={general.finalSavedFields} />
+          </Section>
+        )}
+
+        {contact?.finalSavedFields && (
+          <Section title="Saved Fields — Contact">
+            <JsonBlock value={contact.finalSavedFields} />
           </Section>
         )}
 

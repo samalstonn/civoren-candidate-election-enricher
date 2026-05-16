@@ -1,7 +1,10 @@
-import type { ParsedEnrichmentResult } from "@/types/enrichment";
+import type {
+  GeneralParsedResult,
+  ContactParsedResult,
+  TrackKind,
+} from "@/types/enrichment";
 
-export function parseGeminiResult(rawText: string): ParsedEnrichmentResult {
-  // Strip markdown code fences if Gemini wrapped the JSON
+function parseJson(rawText: string): Record<string, unknown> {
   const cleaned = rawText
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
@@ -14,26 +17,52 @@ export function parseGeminiResult(rawText: string): ParsedEnrichmentResult {
   } catch {
     throw new Error(`Failed to parse Gemini JSON response: ${rawText}`);
   }
-
   if (typeof parsed !== "object" || parsed === null) {
     throw new Error("Gemini response was not a JSON object");
   }
+  return parsed as Record<string, unknown>;
+}
 
-  const obj = parsed as Record<string, unknown>;
+function asString(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+function asStringOrNull(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? (v as unknown[]).filter((x): x is string => typeof x === "string") : [];
+}
+function asConfidence(v: unknown): number | undefined {
+  return typeof v === "number" ? Math.min(1, Math.max(0, v)) : undefined;
+}
 
+export function parseGeneralResult(rawText: string): GeneralParsedResult {
+  const obj = parseJson(rawText);
   return {
-    biography: typeof obj.biography === "string" ? obj.biography : undefined,
-    email: typeof obj.email === "string" ? obj.email : null,
-    phone: typeof obj.phone === "string" ? obj.phone : null,
-    currentRole: typeof obj.currentRole === "string" ? obj.currentRole : null,
-    currentCity: typeof obj.currentCity === "string" ? obj.currentCity : null,
-    sourceUrls: Array.isArray(obj.sourceUrls)
-      ? (obj.sourceUrls as string[]).filter((u) => typeof u === "string")
-      : [],
-    confidence:
-      typeof obj.confidence === "number"
-        ? Math.min(1, Math.max(0, obj.confidence))
-        : undefined,
-    notes: typeof obj.notes === "string" ? obj.notes : undefined,
+    biography: asString(obj.biography),
+    currentRole: asStringOrNull(obj.currentRole),
+    currentCity: asStringOrNull(obj.currentCity),
+    currentState: asStringOrNull(obj.currentState),
+    party: asStringOrNull(obj.party),
+    sourceUrls: asStringArray(obj.sourceUrls),
+    confidence: asConfidence(obj.confidence),
+    notes: asString(obj.notes),
   };
+}
+
+export function parseContactResult(rawText: string): ContactParsedResult {
+  const obj = parseJson(rawText);
+  return {
+    email: asStringOrNull(obj.email),
+    phone: asStringOrNull(obj.phone),
+    linkedin: asStringOrNull(obj.linkedin),
+    website: asStringOrNull(obj.website),
+    sourceUrls: asStringArray(obj.sourceUrls),
+    confidence: asConfidence(obj.confidence),
+    notes: asString(obj.notes),
+  };
+}
+
+export function parseTrackResult(track: TrackKind, rawText: string) {
+  return track === "general" ? parseGeneralResult(rawText) : parseContactResult(rawText);
 }

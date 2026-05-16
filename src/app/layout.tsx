@@ -25,7 +25,7 @@ export default function RootLayout({
             <Link href="/logs" className="text-xs text-gray-500 hover:text-gray-900">Logs</Link>
           </nav>
         </header>
-        <main className="max-w-7xl mx-auto px-6 py-8">{children}</main>
+        <main className="max-w-8xl mx-auto px-6 py-8">{children}</main>
       </body>
     </html>
   );

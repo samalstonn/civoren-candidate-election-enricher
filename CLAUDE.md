@@ -24,6 +24,9 @@ npx tsc --noEmit  # Type-check only (no test suite)
 
 npx prisma generate          # Regenerate client after schema changes
 npx prisma migrate deploy    # Apply pending migration files — always use this, never migrate dev
+
+npm run migrate:audit:dry    # One-time audit-shape migration, dry-run
+npm run migrate:audit        # One-time audit-shape migration, live (idempotent)
 ```
 
 **Never use `prisma db push` or `prisma migrate dev`** in this repo. Migrations are authored in the Civoren parent app and copied here. `migrate dev` does drift detection against the parent app's schema and will always report false positives. `migrate deploy` just applies pending files with no comparison — that's correct behavior here.
@@ -55,33 +58,59 @@ To add a new enrichable entity type, implement `EntityAdapter` and wire up an AP
 
 ### Pipeline (`src/lib/enrichment/pipeline.ts`)
 
-Accepts an adapter and a `mode`, then runs the appropriate stages:
+**The pipeline runs two parallel tracks — `general` and `contact` — each with its own independent state machine (`search → gemini → save`).** Each track has its own search query, its own Tavily results, its own Gemini prompt + raw response + parsed result, and its own save step. They run in parallel via `Promise.allSettled` so one track failing doesn't cancel the other.
 
-| Stage | What it does |
-|---|---|
-| `search` | Builds two Tavily queries (general + contact) via the adapter, runs them in parallel, merges/dedupes, enriches thin sources and contact pages, picks top 5 by score |
-| `gemini` | Builds structured prompt via adapter, calls Gemini, parses JSON response |
-| `save` | Validates email/phone, writes parsed fields to entity (never overwrites existing email/phone) |
+Field ownership:
+- **General track Gemini extracts**: `biography`, `currentRole`, `currentCity`, `currentState`, `party`. The general save writes those to `Candidate`, plus `party` to the candidate's current non-archived `ElectionLink`.
+- **Contact track Gemini extracts**: `email`, `phone`, `linkedin`, `website`. The contact save writes those to `Candidate`. Existing email/phone are preserved; URLs are format-validated.
 
-Modes: `"full"` runs all three; individual modes (`"search"`, `"search_general"`, `"search_contact"`, `"gemini"`, `"save"`) allow re-running a single stage.
+Modes (`PipelineMode`):
+- `"full"` — both tracks, end-to-end.
+- `"general_full"` / `"contact_full"` — one track, end-to-end.
+- `"general_search"` / `"contact_search"` — one track, search stage only.
+- `"general_gemini"` / `"contact_gemini"` — one track, gemini only (requires existing selected sources).
+- `"general_save"` / `"contact_save"` — one track, save only (requires existing parsed result).
 
-Every stage patches `matchAuditJson` incrementally so intermediate artifacts persist on failure.
+Legacy modes (`"search"`, `"search_general"`, `"search_contact"`, `"gemini"`, `"save"`) are normalized to the new modes at the API-route layer via `normalizePipelineMode` (`pipeline.ts`).
+
+Every stage patches `matchAuditJson` incrementally (deep-merging into `general.*` or `contact.*`) so intermediate artifacts persist on failure.
 
 ### Audit Structure (`matchAuditJson`)
 
-All enrichment state is a single JSON blob per entity, holding: `runId`, `status`, `searchQuery`, `contactSearchQuery`, raw Tavily responses, `rankedSources`, `selectedSources`, `geminiPrompt`, `geminiRawResponse`, `parsedResult`, `finalSavedFields`, and `errors[]`.
+The audit blob is now per-track. Shape:
 
-Status progression: `not_started` → `search_queued` → `search_running` → `search_complete` → `gemini_queued` → `gemini_running` → `gemini_complete` → `result_saved`. Failure states: `failed`, `needs_review`.
+```ts
+{
+  runId, startedAt, completedAt?,
+  general: TrackAudit,
+  contact: TrackAudit,
+  errors?: { message, timestamp, track? }[]
+}
+
+TrackAudit = {
+  status: EnrichmentStatus,
+  searchQuery?, searchRawResponse?,
+  rankedSources?, selectedSources?,
+  geminiPrompt?, geminiRawResponse?,
+  parsedResult?,        // GeneralParsedResult or ContactParsedResult depending on track
+  finalSavedFields?,
+}
+```
+
+Each track's `status` progresses `not_started` → `search_queued` → `search_running` → `search_complete` → `gemini_queued` → `gemini_running` → `gemini_complete` → `result_saved`. Failure: `failed`. The DB is fully migrated to this shape via `scripts/migrate-audit-schema.ts` (run via `npm run migrate:audit`); reads no longer go through a runtime projection shim.
+
+The single `enrichmentStatus` column on `EnrichmentRecord` (and on `CrmIntakeDraftRow`) is a **derived overall status** (`deriveOverallStatus` in `auditMigration.ts`): `result_saved` only when both tracks saved; `failed` if either failed; otherwise the less-advanced of the two.
 
 ### Key Files
 
 ```
 src/lib/enrichment/
-├── pipeline.ts               # Main orchestrator
-├── enrichmentRecord.ts       # getEnrichmentAudit / updateEnrichmentAudit (for live candidates)
+├── pipeline.ts               # Main orchestrator (split tracks: general + contact, parallel)
+├── enrichmentRecord.ts       # getEnrichmentAudit / updateEnrichmentTrack / replaceEnrichmentAudit / appendEnrichmentError (live candidates)
+├── auditMigration.ts         # deriveOverallStatus (per-track → single enrichmentStatus mirror)
 ├── callGemini.ts             # Gemini call + token/cost logging to ApiCallLog
 ├── runSearch.ts              # Tavily call wrapper
-├── parseGeminiResult.ts      # JSON validation and type coercion
+├── parseGeminiResult.ts      # parseGeneralResult / parseContactResult / parseTrackResult
 ├── fetchContactPage.ts       # Detect and fetch contact/about pages
 ├── fetchYouTubeTranscript.ts # Fetch transcripts from YouTube URLs
 ├── fetchThinSources.ts       # Full-page fetch for low-content sources
@@ -89,9 +118,10 @@ src/lib/enrichment/
     ├── candidate-intake.ts   # CandidateIntakeAdapter
     └── live-candidate.ts     # LiveCandidateAdapter
 
-src/types/enrichment.ts       # EntityAdapter interface, MatchAuditJson, ParsedEnrichmentResult
+src/types/enrichment.ts       # EntityAdapter interface, MatchAuditJson, TrackAudit, GeneralParsedResult, ContactParsedResult
 src/lib/concurrency.ts        # Semaphore for batch enrichment
 src/lib/cancelRegistry.ts     # AbortSignal tracking for submission-level cancellation
+scripts/migrate-audit-schema.ts  # One-time legacy → track-split audit migration (idempotent)
 ```
 
 ### API Routes
@@ -115,6 +145,8 @@ Migrations live in `prisma/migrations/` and must stay in sync with the parent ap
 
 When updating `schema.prisma` from the parent app, copy the file then re-add the `EnrichmentRecord` model block at the top (after the datasource block) — it's the only model that lives exclusively in this repo.
 
+**Audit shape migration**: the `matchAuditJson` columns on both `EnrichmentRecord` and `CrmIntakeDraftRow` were migrated from a legacy flat shape to the new `{ general, contact }` track-split shape via `scripts/migrate-audit-schema.ts`. Existing dev DBs and any future clones of the parent app's data need to run `npm run migrate:audit` once; the script is idempotent so re-running is safe.
+
 ### UI Structure
 
 All list views use the shared `DataTable` component (`src/components/DataTable.tsx`) — see `docs/data-table.md`. It provides sortable columns, global search + per-column filters, and toggleable column visibility. Page-level filter chips (e.g. enrichmentStatus on `/candidates` and `/intake/[id]`) live above the table and pre-filter the row array.
@@ -125,6 +157,6 @@ All list views use the shared `DataTable` component (`src/components/DataTable.t
 /intake/[id]  Submission detail (DataTable + per-row enrich/details actions + status chips)
 /rows/[id]    Row detail: pipeline timeline, enrich buttons, collapsible audit sections
 /candidates   Candidate list (DataTable + enrichmentStatus filter chips)
-/candidates/[id]  Candidate detail: same layout as /rows/[id]
+/candidates/[id]  Candidate detail: two-column tracks layout — General + Contact pipeline strips, per-track action buttons (Run Search / Run Gemini / Save / Run All), Run Full, and a 2-column artifacts grid. Errors render full-width with a track pill.
 /logs         API call log with cost breakdown (DataTable + apiType chips + server pagination)
 ```

@@ -1,11 +1,15 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import type { CrmIntakeDraftRow, CrmIntakeSubmission } from "@prisma/client";
+import { deriveOverallStatus } from "../auditMigration";
 import type {
   EntityAdapter,
   MatchAuditJson,
-  ParsedEnrichmentResult,
+  GeneralParsedResult,
+  ContactParsedResult,
   TavilyResult,
+  TrackAudit,
+  TrackKind,
 } from "@/types/enrichment";
 
 const STATE_NAMES: Record<string, string> = {
@@ -23,8 +27,7 @@ const STATE_NAMES: Record<string, string> = {
 };
 
 function expandState(s: string): string {
-  const upper = s.trim().toUpperCase();
-  return STATE_NAMES[upper] ?? s;
+  return STATE_NAMES[s.trim().toUpperCase()] ?? s;
 }
 
 const EMAIL_RE_VALIDATE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
@@ -33,7 +36,6 @@ const MIN_USEFUL_CONTENT_LENGTH = 60;
 function isValidEmail(v: string): boolean {
   return EMAIL_RE_VALIDATE.test(v.trim());
 }
-
 function isValidPhone(v: string): boolean {
   return v.replace(/\D/g, "").length >= 10;
 }
@@ -67,7 +69,7 @@ export class CandidateIntakeAdapter implements EntityAdapter {
     return new CandidateIntakeAdapter(row);
   }
 
-  buildSearchQuery(): string {
+  buildSearchQuery(track: TrackKind): string {
     const { row, submission } = this;
     const name =
       [row.firstName, row.lastName].filter(Boolean).join(" ") ||
@@ -76,6 +78,16 @@ export class CandidateIntakeAdapter implements EntityAdapter {
 
     const rawState = row.state || submission.targetState || "";
     const state = rawState ? expandState(rawState) : "";
+
+    if (track === "contact") {
+      const parts: string[] = [];
+      if (name) parts.push(name);
+      if (state) parts.push(state);
+      if (row.position) parts.push(row.position);
+      parts.push("contact email phone");
+      return parts.join(" ").trim();
+    }
+
     const municipality = row.municipality || submission.defaultMunicipality || "";
     const county = row.county || submission.targetCounty || "";
     const year = row.year || submission.defaultYear || "";
@@ -87,36 +99,17 @@ export class CandidateIntakeAdapter implements EntityAdapter {
     if (state) parts.push(state);
     if (row.position) parts.push(row.position);
     if (year) parts.push(year);
-
     return parts.join(" ").trim();
   }
 
-  buildContactSearchQuery(): string {
-    const { row, submission } = this;
-    const name =
-      [row.firstName, row.lastName].filter(Boolean).join(" ") ||
-      row.fullNameRaw ||
-      "";
-
-    const rawState = row.state || submission.targetState || "";
-    const state = rawState ? expandState(rawState) : "";
-
-    const parts: string[] = [];
-    if (name) parts.push(name);
-    if (state) parts.push(state);
-    if (row.position) parts.push(row.position);
-    parts.push("contact email phone");
-
-    return parts.join(" ").trim();
+  buildGeminiPrompt(track: TrackKind, sources: TavilyResult[]): string {
+    return track === "general"
+      ? this.buildGeneralPrompt(sources)
+      : this.buildContactPrompt(sources);
   }
 
-  buildGeminiPrompt(sources: TavilyResult[]): string {
+  private contextLines(): string {
     const { row, submission } = this;
-    const name =
-      [row.firstName, row.lastName].filter(Boolean).join(" ") ||
-      row.fullNameRaw ||
-      "Unknown";
-
     const rawState = row.state || submission.targetState || "";
     const state = rawState ? expandState(rawState) : "";
     const municipality = row.municipality || submission.defaultMunicipality || "";
@@ -124,7 +117,7 @@ export class CandidateIntakeAdapter implements EntityAdapter {
     const year = row.year || submission.defaultYear || "";
     const electionTerm = row.electionTerm || submission.uploadElectionTerm || "";
 
-    const context = [
+    return [
       row.position && `Position: ${row.position}`,
       municipality && `Municipality: ${municipality}`,
       county && `County: ${county}`,
@@ -136,9 +129,11 @@ export class CandidateIntakeAdapter implements EntityAdapter {
     ]
       .filter(Boolean)
       .join("\n");
+  }
 
-    const firstName = (row.firstName ?? "").toLowerCase();
-    const lastName = (row.lastName ?? "").toLowerCase();
+  private usefulSources(sources: TavilyResult[]): string {
+    const firstName = (this.row.firstName ?? "").toLowerCase();
+    const lastName = (this.row.lastName ?? "").toLowerCase();
     const firstNamePrefix = firstName.slice(0, 4);
 
     function mentionsCandidate(s: { title: string; content: string }): boolean {
@@ -155,19 +150,31 @@ export class CandidateIntakeAdapter implements EntityAdapter {
       (s) => s.content && s.content.trim().length >= MIN_USEFUL_CONTENT_LENGTH
     );
     const relevantSources = thickSources.filter(mentionsCandidate);
-    const usefulSources = relevantSources.length > 0 ? relevantSources : thickSources;
+    const useful = relevantSources.length > 0 ? relevantSources : thickSources;
 
-    const sourcesText = usefulSources
+    return useful
       .map((s) => {
-        const content =
-          s.content.length > 4000 ? s.content.slice(0, 4000) + "…" : s.content;
+        const content = s.content.length > 4000 ? s.content.slice(0, 4000) + "…" : s.content;
         let domain = s.url;
-        try { domain = new URL(s.url).hostname.replace(/^www\./, ""); } catch { /* keep url */ }
+        try {
+          domain = new URL(s.url).hostname.replace(/^www\./, "");
+        } catch {
+          /* keep url */
+        }
         return `[${domain}] ${s.title}\nURL: ${s.url}\n${content}`;
       })
       .join("\n\n---\n\n");
+  }
 
-    return `You are a candidate research assistant. Based ONLY on the search results provided below, extract information about this political candidate.
+  private buildGeneralPrompt(sources: TavilyResult[]): string {
+    const name =
+      [this.row.firstName, this.row.lastName].filter(Boolean).join(" ") ||
+      this.row.fullNameRaw ||
+      "Unknown";
+    const context = this.contextLines();
+    const sourcesText = this.usefulSources(sources);
+
+    return `You are a candidate research assistant. Based ONLY on the search results provided below, extract general biographical information about this political candidate.
 
 CANDIDATE:
 Name: ${name}
@@ -178,21 +185,51 @@ ${sourcesText || "No search results available."}
 
 INSTRUCTIONS:
 - Write a biography of approximately 600 characters summarizing who this candidate is based on the search results. Cover their background, policy positions if known, and why they are running. The biography is public-facing — do NOT reference, cite, or mention any sources, URLs, or websites. Write in third person as if it were an editorial profile.
-- Extract an email address ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer email addresses.
-- Extract a phone number ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer phone numbers.
-- Extract their current professional role or occupation (e.g. "Attorney", "Small business owner", "Retired teacher"). This should be their professional identity, NOT the election they are running in. If sources indicate they currently hold this office (i.e. they are an incumbent), use "Incumbent [position title]". If no professional role is found at all, use "Candidate for [position title]".
+- Extract their current professional role or occupation. This should be their professional identity, NOT the election they are running in. If sources indicate they are an incumbent, use "Incumbent [position title]". If no professional role is found, use "Candidate for [position title]".
 - Extract the city where they currently live or work. Null if not found.
 - List the URLs from search results that were most relevant.
-- Rate your confidence from 0.0 to 1.0 that this is the correct candidate (not a different person with the same name).
-- Add brief notes about ambiguity, alternative candidates found, or anything unusual.
+- Rate your confidence from 0.0 to 1.0 that this is the correct candidate.
+- Add brief notes about ambiguity or anything unusual.
 
 Respond with ONLY valid JSON in this exact format:
 {
   "biography": "string or null",
-  "email": "string or null",
-  "phone": "string or null",
   "currentRole": "string or null",
   "currentCity": "string or null",
+  "sourceUrls": ["url1", "url2"],
+  "confidence": 0.0,
+  "notes": "string or null"
+}`;
+  }
+
+  private buildContactPrompt(sources: TavilyResult[]): string {
+    const name =
+      [this.row.firstName, this.row.lastName].filter(Boolean).join(" ") ||
+      this.row.fullNameRaw ||
+      "Unknown";
+    const context = this.contextLines();
+    const sourcesText = this.usefulSources(sources);
+
+    return `You are a candidate research assistant. Based ONLY on the search results provided below, extract contact information for this political candidate.
+
+CANDIDATE:
+Name: ${name}
+${context}
+
+SEARCH RESULTS:
+${sourcesText || "No search results available."}
+
+INSTRUCTIONS:
+- Extract an email address ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer email addresses.
+- Extract a phone number ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer phone numbers.
+- List the URLs from search results where you found contact information.
+- Rate your confidence from 0.0 to 1.0.
+- Add brief notes about ambiguity or anything unusual.
+
+Respond with ONLY valid JSON in this exact format:
+{
+  "email": "string or null",
+  "phone": "string or null",
   "sourceUrls": ["url1", "url2"],
   "confidence": 0.0,
   "notes": "string or null"
@@ -205,40 +242,122 @@ Respond with ONLY valid JSON in this exact format:
       select: { matchAuditJson: true },
     });
     const raw = record?.matchAuditJson;
-    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-      return raw as unknown as MatchAuditJson;
-    }
-    return null;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    return raw as unknown as MatchAuditJson;
   }
 
-  async updateAudit(patch: Partial<MatchAuditJson>): Promise<void> {
-    const existing = await prisma.crmIntakeDraftRow.findUnique({
-      where: { id: this.entityId },
-      select: { matchAuditJson: true },
-    });
+  private async readCurrent(): Promise<MatchAuditJson> {
+    const existing = await this.getAudit();
+    return (
+      existing ?? {
+        runId: crypto.randomUUID(),
+        startedAt: new Date().toISOString(),
+        general: { status: "not_started" },
+        contact: { status: "not_started" },
+        errors: [],
+      }
+    );
+  }
 
-    const current =
-      existing?.matchAuditJson &&
-      typeof existing.matchAuditJson === "object" &&
-      !Array.isArray(existing.matchAuditJson)
-        ? (existing.matchAuditJson as Partial<MatchAuditJson>)
-        : {};
-
-    const updated: Partial<MatchAuditJson> = { ...current, ...patch };
-
+  private async persist(audit: MatchAuditJson): Promise<void> {
+    const overall = deriveOverallStatus(audit);
     await prisma.crmIntakeDraftRow.update({
       where: { id: this.entityId },
       data: {
-        matchAuditJson: updated as unknown as Prisma.InputJsonValue,
-        ...(patch.status ? { enrichmentStatus: patch.status } : {}),
+        matchAuditJson: audit as unknown as Prisma.InputJsonValue,
+        enrichmentStatus: overall,
       },
     });
   }
 
-  async saveResult(parsed: ParsedEnrichmentResult, auditJson: MatchAuditJson): Promise<void> {
+  async updateAudit(patch: Partial<Omit<MatchAuditJson, "general" | "contact">>): Promise<void> {
+    const current = await this.readCurrent();
+    const merged: MatchAuditJson = {
+      ...current,
+      ...patch,
+      errors: patch.errors !== undefined ? patch.errors : current.errors,
+    };
+    await this.persist(merged);
+  }
+
+  async updateTrack(track: TrackKind, patch: Partial<TrackAudit>): Promise<void> {
+    const current = await this.readCurrent();
+    const merged: MatchAuditJson = {
+      ...current,
+      [track]: { ...current[track], ...patch },
+    };
+    await this.persist(merged);
+  }
+
+  async appendError(error: { message: string; timestamp: string; track?: TrackKind }): Promise<void> {
+    const current = await this.readCurrent();
+    const merged: MatchAuditJson = {
+      ...current,
+      errors: [...(current.errors ?? []), error],
+    };
+    await this.persist(merged);
+  }
+
+  async saveTrackResult(
+    track: TrackKind,
+    parsed: GeneralParsedResult | ContactParsedResult,
+    audit: MatchAuditJson
+  ): Promise<void> {
+    if (track === "general") {
+      await this.saveGeneral(parsed as GeneralParsedResult, audit);
+    } else {
+      await this.saveContact(parsed as ContactParsedResult, audit);
+    }
+  }
+
+  private async saveGeneral(parsed: GeneralParsedResult, audit: MatchAuditJson): Promise<void> {
     const row = await prisma.crmIntakeDraftRow.findUnique({
       where: { id: this.entityId },
-      select: { state: true, rawData: true, position: true, email: true, phone: true },
+      select: { state: true, rawData: true, position: true },
+    });
+
+    const finalSavedFields: Record<string, unknown> = {};
+    const currentRoleFallback = row?.position ? `Candidate for ${row.position}` : null;
+    const currentRole = parsed.currentRole || currentRoleFallback;
+
+    const profileEnrichment = {
+      bio: parsed.biography || null,
+      currentRole,
+      currentCity: parsed.currentCity || null,
+      currentState: row?.state || null,
+      confidence: parsed.confidence ?? null,
+      sources: parsed.sourceUrls || [],
+      model: "gemini",
+      enrichedAt: new Date().toISOString(),
+    };
+    finalSavedFields.profileEnrichment = profileEnrichment;
+    if (parsed.confidence !== undefined) finalSavedFields.confidence = parsed.confidence;
+
+    const reviewerNotes = [parsed.biography, parsed.notes].filter(Boolean).join("\n\n");
+    if (reviewerNotes) finalSavedFields.reviewerNotes = reviewerNotes;
+
+    const existingRaw =
+      row?.rawData && typeof row.rawData === "object" && !Array.isArray(row.rawData)
+        ? (row.rawData as Record<string, unknown>)
+        : {};
+    const newRawData = { ...existingRaw, _profileEnrichment: profileEnrichment };
+
+    await prisma.crmIntakeDraftRow.update({
+      where: { id: this.entityId },
+      data: {
+        ...(parsed.confidence !== undefined ? { confidence: parsed.confidence } : {}),
+        ...(reviewerNotes ? { reviewerNotes } : {}),
+        rawData: newRawData as unknown as Prisma.InputJsonValue,
+      },
+    });
+
+    await this.commitTrack("general", audit, finalSavedFields, parsed);
+  }
+
+  private async saveContact(parsed: ContactParsedResult, audit: MatchAuditJson): Promise<void> {
+    const row = await prisma.crmIntakeDraftRow.findUnique({
+      where: { id: this.entityId },
+      select: { email: true, phone: true },
     });
 
     const finalSavedFields: Record<string, unknown> = {};
@@ -267,54 +386,39 @@ Respond with ONLY valid JSON in this exact format:
       }
     }
 
-    if (parsed.confidence !== undefined)
-      finalSavedFields.confidence = parsed.confidence;
-    if (parsed.biography || parsed.notes) {
-      finalSavedFields.reviewerNotes = [parsed.biography, parsed.notes]
-        .filter(Boolean)
-        .join("\n\n");
-    }
-
-    const currentRoleFallback = row?.position ? `Candidate for ${row.position}` : null;
-    const currentRole = parsed.currentRole || currentRoleFallback;
-
-    const profileEnrichment = {
-      bio: parsed.biography || null,
-      currentRole,
-      currentCity: parsed.currentCity || null,
-      currentState: row?.state || null,
-      confidence: parsed.confidence ?? null,
-      sources: parsed.sourceUrls || [],
-      model: "gemini",
-      enrichedAt: new Date().toISOString(),
-    };
-
-    const existingRaw =
-      row?.rawData && typeof row.rawData === "object" && !Array.isArray(row.rawData)
-        ? (row.rawData as Record<string, unknown>)
-        : {};
-    const newRawData = { ...existingRaw, _profileEnrichment: profileEnrichment };
-
-    const completedAudit: MatchAuditJson = {
-      ...auditJson,
-      status: "result_saved",
-      completedAt: new Date().toISOString(),
-      finalSavedFields,
-    };
+    if (parsed.confidence !== undefined) finalSavedFields.confidence = parsed.confidence;
 
     await prisma.crmIntakeDraftRow.update({
       where: { id: this.entityId },
       data: {
         ...(emailToSave ? { email: emailToSave } : {}),
         ...(phoneToSave ? { phone: phoneToSave } : {}),
-        ...(parsed.confidence !== undefined ? { confidence: parsed.confidence } : {}),
-        ...(finalSavedFields.reviewerNotes
-          ? { reviewerNotes: finalSavedFields.reviewerNotes as string }
-          : {}),
-        rawData: newRawData as unknown as Prisma.InputJsonValue,
-        enrichmentStatus: "result_saved",
-        matchAuditJson: completedAudit as unknown as Prisma.InputJsonValue,
       },
     });
+
+    await this.commitTrack("contact", audit, finalSavedFields, parsed);
+  }
+
+  private async commitTrack(
+    track: TrackKind,
+    audit: MatchAuditJson,
+    finalSavedFields: Record<string, unknown>,
+    parsed: GeneralParsedResult | ContactParsedResult
+  ): Promise<void> {
+    const fresh = await this.readCurrent();
+    const base: MatchAuditJson = fresh ?? audit;
+    const updated: MatchAuditJson = {
+      ...base,
+      [track]: {
+        ...base[track],
+        status: "result_saved",
+        parsedResult: parsed,
+        finalSavedFields,
+      },
+    };
+    if (updated.general.status === "result_saved" && updated.contact.status === "result_saved") {
+      updated.completedAt = new Date().toISOString();
+    }
+    await this.persist(updated);
   }
 }

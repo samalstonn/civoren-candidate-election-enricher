@@ -15,16 +15,24 @@ type Target = "not_started" | "all_failed" | "search_failed" | "gemini_failed" |
 
 function auditStatus(matchAuditJson: unknown): string | null {
   if (matchAuditJson && typeof matchAuditJson === "object" && !Array.isArray(matchAuditJson)) {
-    const s = (matchAuditJson as Record<string, unknown>).status;
+    const obj = matchAuditJson as Record<string, unknown>;
+    // New shape: pick the less-advanced of the two track statuses; legacy: top-level status.
+    const general = obj.general && typeof obj.general === "object"
+      ? ((obj.general as Record<string, unknown>).status as string | undefined)
+      : undefined;
+    const contact = obj.contact && typeof obj.contact === "object"
+      ? ((obj.contact as Record<string, unknown>).status as string | undefined)
+      : undefined;
+    if (general || contact) return general ?? contact ?? null;
+    const s = obj.status;
     return typeof s === "string" ? s : null;
   }
   return null;
 }
 
-function resumeMode(enrichmentStatus: string | null, lastAuditStatus: string | null): PipelineMode {
-  if (enrichmentStatus !== "failed") return "full";
-  if (lastAuditStatus === "gemini_complete") return "save";
-  if (lastAuditStatus === "search_complete") return "gemini";
+// The legacy stage-resume optimization (re-run only `gemini` or `save` on a failed row)
+// doesn't translate cleanly to two parallel tracks. For v1, always retry `full`.
+function resumeMode(_enrichmentStatus: string | null, _lastAuditStatus: string | null): PipelineMode {
   return "full";
 }
 

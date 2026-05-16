@@ -75,7 +75,6 @@ export async function injectContactPages(
         title: `${new URL(origin).hostname} — Contact`,
         url: contactUrl,
         content: `[Contact page] ${content}`,
-        sourceQuery: source.sourceQuery,
       };
       return result;
     })
