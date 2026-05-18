@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { CandidateIntakeAdapter } from "@/lib/enrichment/adapters/candidate-intake";
+import { trackIds } from "@/lib/enrichment/registry";
 
 export async function GET(
   _req: Request,
@@ -20,5 +22,17 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  return NextResponse.json(row);
+  // Pre-compute search-query previews so the UI can show them in the
+  // artifacts section before any pipeline run.
+  let previewQueries: Record<string, string> = {};
+  try {
+    const adapter = await CandidateIntakeAdapter.create(rowId);
+    for (const id of trackIds("candidate")) {
+      previewQueries[id] = adapter.tracks[id].buildSearchQuery();
+    }
+  } catch {
+    previewQueries = {};
+  }
+
+  return NextResponse.json({ ...row, previewQueries });
 }

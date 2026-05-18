@@ -3,7 +3,41 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { MatchAuditJson, TrackAudit, TrackKind } from "@/types/enrichment";
+import type { MatchAuditJson, TrackAudit } from "@/types/enrichment";
+import { ENTITIES, type TrackIdFor } from "@/lib/enrichment/registry";
+import type { PipelineModeFor } from "@/lib/enrichment/pipeline";
+
+type CandidateTrackId = TrackIdFor<"candidate">;
+type Mode = PipelineModeFor<"candidate">;
+const CANDIDATE_TRACKS = ENTITIES.candidate.tracks;
+
+const ACCENT_CLASSES: Record<string, { button: string; pill: string }> = {
+  gray: {
+    button: "bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200",
+    pill: "bg-gray-100 text-gray-500",
+  },
+  blue: {
+    button: "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200",
+    pill: "bg-blue-50 text-blue-600",
+  },
+  amber: {
+    button: "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200",
+    pill: "bg-amber-50 text-amber-700",
+  },
+  green: {
+    button: "bg-green-50 hover:bg-green-100 text-green-700 border-green-200",
+    pill: "bg-green-50 text-green-700",
+  },
+  purple: {
+    button: "bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200",
+    pill: "bg-purple-50 text-purple-600",
+  },
+};
+
+function accentFor(trackId: string): { button: string; pill: string } {
+  const t = CANDIDATE_TRACKS.find((tr) => tr.id === trackId);
+  return ACCENT_CLASSES[t?.accent ?? "gray"] ?? ACCENT_CLASSES.gray;
+}
 
 interface Election {
   position: string;
@@ -33,6 +67,7 @@ interface Candidate {
     matchAuditJson: MatchAuditJson | null;
     updatedAt: string;
   } | null;
+  previewQueries?: Record<string, string>;
 }
 
 const STAGES = [
@@ -58,17 +93,6 @@ const STAGE_COLORS: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
   needs_review: "bg-amber-100 text-amber-700",
 };
-
-type Mode =
-  | "general_search"
-  | "contact_search"
-  | "general_gemini"
-  | "contact_gemini"
-  | "general_save"
-  | "contact_save"
-  | "general_full"
-  | "contact_full"
-  | "full";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -181,12 +205,21 @@ function PipelineStrip({ label, status }: { label: string; status: string }) {
   );
 }
 
-function TrackArtifacts({ audit }: { audit: TrackAudit }) {
+function TrackArtifacts({
+  audit,
+  previewQuery,
+}: {
+  audit: TrackAudit;
+  previewQuery?: string;
+}) {
+  // Show audit value when present, fall back to deterministic preview.
+  const displayedQuery = audit.searchQuery ?? previewQuery;
+  const isPreview = !audit.searchQuery && !!previewQuery;
   return (
     <div>
-      {audit.searchQuery && (
-        <Section title="Search Query">
-          <TextBlock value={audit.searchQuery} />
+      {displayedQuery && (
+        <Section title={isPreview ? "Search Query (preview)" : "Search Query"}>
+          <TextBlock value={displayedQuery} />
         </Section>
       )}
       {audit.searchRawResponse !== undefined && (
@@ -241,50 +274,41 @@ function TrackArtifacts({ audit }: { audit: TrackAudit }) {
 }
 
 function TrackButtons({
+  trackId,
   label,
   disabled,
   running,
-  onSearch,
-  onGemini,
-  onSave,
-  onAll,
-  track,
+  onRun,
   audit,
 }: {
+  trackId: CandidateTrackId;
   label: string;
   disabled: boolean;
   running: Mode | null;
-  onSearch: () => void;
-  onGemini: () => void;
-  onSave: () => void;
-  onAll: () => void;
-  track: TrackKind;
+  onRun: (mode: Mode) => void;
   audit: TrackAudit;
 }) {
-  const accent =
-    track === "contact"
-      ? "bg-blue-50 hover:bg-blue-100 text-blue-700 border-blue-200"
-      : "bg-gray-50 hover:bg-gray-100 text-gray-700 border-gray-200";
+  const accent = accentFor(trackId).button;
   const hasSources = !!audit.selectedSources?.length;
   const hasParsed = !!audit.parsedResult;
 
-  const searchKey: Mode = track === "general" ? "general_search" : "contact_search";
-  const geminiKey: Mode = track === "general" ? "general_gemini" : "contact_gemini";
-  const saveKey: Mode = track === "general" ? "general_save" : "contact_save";
-  const fullKey: Mode = track === "general" ? "general_full" : "contact_full";
+  const searchKey = `${trackId}_search` as Mode;
+  const geminiKey = `${trackId}_gemini` as Mode;
+  const saveKey = `${trackId}_save` as Mode;
+  const fullKey = `${trackId}_full` as Mode;
 
   return (
     <div className="flex flex-col gap-1 min-w-[8rem]">
       <div className="text-[10px] text-gray-400 uppercase tracking-wider font-medium px-1">{label}</div>
       <button
-        onClick={onSearch}
+        onClick={() => onRun(searchKey)}
         disabled={disabled}
         className={`text-xs px-3 py-1.5 disabled:opacity-40 disabled:cursor-not-allowed font-medium rounded border transition-colors ${accent}`}
       >
         {running === searchKey ? "Running..." : "Run Search"}
       </button>
       <button
-        onClick={onGemini}
+        onClick={() => onRun(geminiKey)}
         disabled={disabled || !hasSources}
         title={!hasSources ? "Run Search first" : undefined}
         className="text-xs px-3 py-1.5 bg-purple-50 hover:bg-purple-100 disabled:opacity-40 disabled:cursor-not-allowed text-purple-700 font-medium rounded border border-purple-200 transition-colors"
@@ -292,7 +316,7 @@ function TrackButtons({
         {running === geminiKey ? "Running..." : "Run Gemini"}
       </button>
       <button
-        onClick={onSave}
+        onClick={() => onRun(saveKey)}
         disabled={disabled || !hasParsed}
         title={!hasParsed ? "Run Gemini first" : undefined}
         className="text-xs px-3 py-1.5 bg-green-50 hover:bg-green-100 disabled:opacity-40 disabled:cursor-not-allowed text-green-700 font-medium rounded border border-green-200 transition-colors"
@@ -300,7 +324,7 @@ function TrackButtons({
         {running === saveKey ? "Saving..." : "Save"}
       </button>
       <button
-        onClick={onAll}
+        onClick={() => onRun(fullKey)}
         disabled={disabled}
         className="text-xs px-3 py-1.5 bg-amber-50 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed text-amber-700 font-medium rounded border border-amber-200 transition-colors"
       >
@@ -361,8 +385,8 @@ export default function CandidateDetailPage() {
   if (!candidate) return null;
 
   const audit = candidate.enrichmentRecord?.matchAuditJson ?? null;
-  const general = audit?.general ?? emptyTrack();
-  const contact = audit?.contact ?? emptyTrack();
+  const trackAuditFor = (id: CandidateTrackId): TrackAudit =>
+    (audit?.[id] as TrackAudit | undefined) ?? emptyTrack();
   const isRunning = running !== null;
 
   return (
@@ -403,30 +427,19 @@ export default function CandidateDetailPage() {
           </div>
         </div>
 
-        {/* Action buttons: General column | Contact column | Run Full */}
+        {/* Action buttons: one column per track + Run Full */}
         <div className="flex gap-3 items-stretch">
-          <TrackButtons
-            label="General"
-            disabled={isRunning}
-            running={running}
-            onSearch={() => runMode("general_search")}
-            onGemini={() => runMode("general_gemini")}
-            onSave={() => runMode("general_save")}
-            onAll={() => runMode("general_full")}
-            track="general"
-            audit={general}
-          />
-          <TrackButtons
-            label="Contact"
-            disabled={isRunning}
-            running={running}
-            onSearch={() => runMode("contact_search")}
-            onGemini={() => runMode("contact_gemini")}
-            onSave={() => runMode("contact_save")}
-            onAll={() => runMode("contact_full")}
-            track="contact"
-            audit={contact}
-          />
+          {CANDIDATE_TRACKS.map((t) => (
+            <TrackButtons
+              key={t.id}
+              trackId={t.id as CandidateTrackId}
+              label={t.label}
+              disabled={isRunning}
+              running={running}
+              onRun={runMode}
+              audit={trackAuditFor(t.id as CandidateTrackId)}
+            />
+          ))}
           <button
             onClick={() => runMode("full")}
             disabled={isRunning}
@@ -439,8 +452,13 @@ export default function CandidateDetailPage() {
 
       {/* Pipeline strips — one per track */}
       <div className="mb-6 space-y-3">
-        <PipelineStrip label="Pipeline — General" status={general.status} />
-        <PipelineStrip label="Pipeline — Contact" status={contact.status} />
+        {CANDIDATE_TRACKS.map((t) => (
+          <PipelineStrip
+            key={t.id}
+            label={`Pipeline — ${t.label}`}
+            status={trackAuditFor(t.id as CandidateTrackId).status}
+          />
+        ))}
         {audit && (audit.startedAt || audit.completedAt || audit.runId) && (
           <div className="text-xs text-gray-400 flex gap-4">
             {audit.startedAt && <span>Started: {new Date(audit.startedAt).toLocaleString()}</span>}
@@ -509,18 +527,25 @@ export default function CandidateDetailPage() {
         </div>
       )}
 
-      {/* Pipeline Artifacts — two columns */}
+      {/* Pipeline Artifacts — one column per track */}
       <div className="mt-6">
         <div className="text-xs text-gray-400 mb-3 font-medium uppercase tracking-wider">Pipeline Artifacts</div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div>
-            <div className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">General</div>
-            <TrackArtifacts audit={general} />
-          </div>
-          <div>
-            <div className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">Contact</div>
-            <TrackArtifacts audit={contact} />
-          </div>
+        <div
+          className={`grid gap-4 ${
+            CANDIDATE_TRACKS.length >= 3
+              ? "grid-cols-1 lg:grid-cols-3"
+              : "grid-cols-1 lg:grid-cols-2"
+          }`}
+        >
+          {CANDIDATE_TRACKS.map((t) => (
+            <div key={t.id}>
+              <div className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">{t.label}</div>
+              <TrackArtifacts
+                audit={trackAuditFor(t.id as CandidateTrackId)}
+                previewQuery={candidate.previewQueries?.[t.id]}
+              />
+            </div>
+          ))}
         </div>
 
         {audit?.errors && audit.errors.length > 0 && (
@@ -534,11 +559,7 @@ export default function CandidateDetailPage() {
                         <span>{new Date(e.timestamp).toLocaleString()}</span>
                         {e.track && (
                           <span
-                            className={`px-1.5 py-0.5 rounded font-medium ${
-                              e.track === "contact"
-                                ? "bg-blue-50 text-blue-600"
-                                : "bg-gray-100 text-gray-500"
-                            }`}
+                            className={`px-1.5 py-0.5 rounded font-medium ${accentFor(e.track).pill}`}
                           >
                             {e.track}
                           </span>
@@ -553,7 +574,7 @@ export default function CandidateDetailPage() {
           </div>
         )}
 
-        {!audit && (
+        {!audit && !Object.keys(candidate.previewQueries ?? {}).length && (
           <div className="text-xs text-gray-400 py-8 text-center">
             No pipeline run yet. Click Run Full to start.
           </div>

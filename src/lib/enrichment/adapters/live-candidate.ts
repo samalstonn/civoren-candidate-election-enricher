@@ -3,53 +3,24 @@ import {
   getEnrichmentAudit,
   updateEnrichmentAudit,
   updateEnrichmentTrack,
-  replaceEnrichmentAudit,
   appendEnrichmentError,
 } from "@/lib/enrichment/enrichmentRecord";
+import { buildPrompt } from "@/lib/enrichment/prompt";
+import { expandState } from "@/lib/enrichment/states";
+import { isValidEmail, isValidPhone, isValidUrl } from "@/lib/enrichment/validate";
+import { getTrack, type TrackIdFor } from "@/lib/enrichment/registry";
 import type {
+  AdapterTrack,
   EntityAdapter,
   MatchAuditJson,
   GeneralParsedResult,
   ContactParsedResult,
+  NameParts,
   TavilyResult,
   TrackAudit,
-  TrackKind,
 } from "@/types/enrichment";
 
-const ENTITY_TYPE = "candidate";
-
-const STATE_NAMES: Record<string, string> = {
-  AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
-  CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
-  HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa",
-  KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland",
-  MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi",
-  MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire",
-  NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina",
-  ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania",
-  RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee",
-  TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington",
-  WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming", DC: "District of Columbia",
-};
-
-function expandState(s: string): string {
-  const upper = s.trim().toUpperCase();
-  return STATE_NAMES[upper] ?? s;
-}
-
-const EMAIL_RE_VALIDATE = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-const URL_RE_VALIDATE = /^(https?:\/\/|www\.)\S+\.\S+/i;
-const MIN_USEFUL_CONTENT_LENGTH = 60;
-
-function isValidEmail(v: string): boolean {
-  return EMAIL_RE_VALIDATE.test(v.trim());
-}
-function isValidPhone(v: string): boolean {
-  return v.replace(/\D/g, "").length >= 10;
-}
-function isValidUrl(v: string): boolean {
-  return URL_RE_VALIDATE.test(v.trim());
-}
+const ENTITY_TYPE = "candidate" as const;
 
 type CandidateWithElection = {
   id: number;
@@ -73,10 +44,14 @@ type CandidateWithElection = {
   }[];
 };
 
-export class LiveCandidateAdapter implements EntityAdapter {
+type CandidateTrackId = TrackIdFor<"candidate">;
+
+export class LiveCandidateAdapter implements EntityAdapter<"candidate"> {
+  readonly entityKind = ENTITY_TYPE;
   readonly entityId: number;
   readonly logContext: { rowId: number; submissionId?: number };
-  readonly nameParts: { firstName?: string | null; lastName?: string | null; fullNameRaw?: string | null };
+  readonly nameParts: NameParts;
+  readonly tracks: Record<CandidateTrackId, AdapterTrack>;
 
   private readonly candidate: CandidateWithElection;
   private readonly electionLink: CandidateWithElection["elections"][number] | null;
@@ -94,6 +69,39 @@ export class LiveCandidateAdapter implements EntityAdapter {
       fullNameRaw: candidate.name,
       firstName: parts[0] ?? null,
       lastName: parts.length > 1 ? parts[parts.length - 1] : null,
+    };
+
+    // The per-track map. All entity-kind branching lives here; private helpers
+    // below do the entity-specific work for each track.
+    this.tracks = {
+      general: {
+        buildSearchQuery: () => this.buildGeneralQuery(),
+        buildGeminiPrompt: (sources) =>
+          buildPrompt({
+            entityKind: "political candidate",
+            contextHeader: "CANDIDATE",
+            context: `Name: ${this.nameParts.fullNameRaw ?? "Unknown"}\n${this.contextLines()}`,
+            sources,
+            nameParts: this.nameParts,
+            instructions: [...getTrack("candidate", "general").instructions],
+            jsonSchema: getTrack("candidate", "general").jsonSchema,
+          }),
+        save: (parsed, audit) => this.saveGeneral(parsed as GeneralParsedResult, audit),
+      },
+      contact: {
+        buildSearchQuery: () => this.buildContactQuery(),
+        buildGeminiPrompt: (sources) =>
+          buildPrompt({
+            entityKind: "political candidate",
+            contextHeader: "CANDIDATE",
+            context: `Name: ${this.nameParts.fullNameRaw ?? "Unknown"}\n${this.contextLines()}`,
+            sources,
+            nameParts: this.nameParts,
+            instructions: [...getTrack("candidate", "contact").instructions],
+            jsonSchema: getTrack("candidate", "contact").jsonSchema,
+          }),
+        save: (parsed, audit) => this.saveContact(parsed as ContactParsedResult, audit),
+      },
     };
   }
 
@@ -133,22 +141,14 @@ export class LiveCandidateAdapter implements EntityAdapter {
     return new LiveCandidateAdapter(candidate);
   }
 
-  buildSearchQuery(track: TrackKind): string {
+  // ---- Search-query builders (entity-specific) ----
+
+  private buildGeneralQuery(): string {
     const { nameParts, election } = this;
     const name = nameParts.fullNameRaw ?? "";
     const state = election ? expandState(election.state) : "";
-    const position = election?.position ?? "";
-
-    if (track === "contact") {
-      const parts: string[] = [];
-      if (name) parts.push(name);
-      if (state) parts.push(state);
-      if (position) parts.push(position);
-      parts.push("contact email phone");
-      return parts.join(" ").trim();
-    }
-
     const city = election?.city ?? "";
+    const position = election?.position ?? "";
     const year = election ? String(election.date.getFullYear()) : "";
     const parts: string[] = [];
     if (name) parts.push(name);
@@ -159,10 +159,17 @@ export class LiveCandidateAdapter implements EntityAdapter {
     return parts.join(" ").trim();
   }
 
-  buildGeminiPrompt(track: TrackKind, sources: TavilyResult[]): string {
-    return track === "general"
-      ? this.buildGeneralPrompt(sources)
-      : this.buildContactPrompt(sources);
+  private buildContactQuery(): string {
+    const { nameParts, election } = this;
+    const name = nameParts.fullNameRaw ?? "";
+    const state = election ? expandState(election.state) : "";
+    const position = election?.position ?? "";
+    const parts: string[] = [];
+    if (name) parts.push(name);
+    if (state) parts.push(state);
+    if (position) parts.push(position);
+    parts.push("contact email phone");
+    return parts.join(" ").trim();
   }
 
   private contextLines(): string {
@@ -179,140 +186,27 @@ export class LiveCandidateAdapter implements EntityAdapter {
       .join("\n");
   }
 
-  private usefulSources(sources: TavilyResult[]): string {
-    const firstName = (this.nameParts.firstName ?? "").toLowerCase();
-    const lastName = (this.nameParts.lastName ?? "").toLowerCase();
-    const firstNamePrefix = firstName.slice(0, 4);
-
-    function mentionsCandidate(s: { title: string; content: string }): boolean {
-      const hay = (s.title + " " + s.content).toLowerCase();
-      const lastNameMatch = !lastName || hay.includes(lastName);
-      const firstNameMatch =
-        !firstName ||
-        hay.includes(firstName) ||
-        (firstNamePrefix.length >= 3 && hay.includes(firstNamePrefix));
-      return lastNameMatch && firstNameMatch;
-    }
-
-    const thickSources = sources.filter(
-      (s) => s.content && s.content.trim().length >= MIN_USEFUL_CONTENT_LENGTH
-    );
-    const relevantSources = thickSources.filter(mentionsCandidate);
-    const useful = relevantSources.length > 0 ? relevantSources : thickSources;
-
-    return useful
-      .map((s) => {
-        const content = s.content.length > 4000 ? s.content.slice(0, 4000) + "…" : s.content;
-        let domain = s.url;
-        try {
-          domain = new URL(s.url).hostname.replace(/^www\./, "");
-        } catch {
-          // keep url
-        }
-        return `[${domain}] ${s.title}\nURL: ${s.url}\n${content}`;
-      })
-      .join("\n\n---\n\n");
-  }
-
-  private buildGeneralPrompt(sources: TavilyResult[]): string {
-    const name = this.nameParts.fullNameRaw ?? "Unknown";
-    const context = this.contextLines();
-    const sourcesText = this.usefulSources(sources);
-
-    return `You are a candidate research assistant. Based ONLY on the search results provided below, extract general biographical and contextual information about this political candidate.
-
-CANDIDATE:
-Name: ${name}
-${context}
-
-SEARCH RESULTS:
-${sourcesText || "No search results available."}
-
-INSTRUCTIONS:
-- Write a biography of approximately 600 characters summarizing who this candidate is based on the search results. Cover their background, policy positions if known, and why they are running. The biography is public-facing — do NOT reference, cite, or mention any sources, URLs, or websites. Write in third person as if it were an editorial profile.
-- Extract their current professional role or occupation (e.g. "Attorney", "Small business owner", "Retired teacher"). This should be their professional identity, NOT the election they are running in. If sources indicate they currently hold this office (i.e. they are an incumbent), use "Incumbent [position title]". If no professional role is found at all, use "Candidate for [position title]".
-- Extract the city where they currently live or work. Null if not found.
-- Extract the US state where they currently live or work, as a two-letter postal code (e.g. "CA", "TX"). Null if not found.
-- Extract the political party they are running under for the position above. Use the canonical party name when possible (e.g. "Democratic", "Republican", "Independent", "Libertarian", "Green"). Null if not found.
-- List the URLs from search results that were most relevant.
-- Rate your confidence from 0.0 to 1.0 that this is the correct candidate (not a different person with the same name).
-- Add brief notes about ambiguity, alternative candidates found, or anything unusual.
-
-Respond with ONLY valid JSON in this exact format:
-{
-  "biography": "string or null",
-  "currentRole": "string or null",
-  "currentCity": "string or null",
-  "currentState": "string or null",
-  "party": "string or null",
-  "sourceUrls": ["url1", "url2"],
-  "confidence": 0.0,
-  "notes": "string or null"
-}`;
-  }
-
-  private buildContactPrompt(sources: TavilyResult[]): string {
-    const name = this.nameParts.fullNameRaw ?? "Unknown";
-    const context = this.contextLines();
-    const sourcesText = this.usefulSources(sources);
-
-    return `You are a candidate research assistant. Based ONLY on the search results provided below, extract contact information for this political candidate.
-
-CANDIDATE:
-Name: ${name}
-${context}
-
-SEARCH RESULTS:
-${sourcesText || "No search results available."}
-
-INSTRUCTIONS:
-- Extract an email address ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer email addresses. Prefer the candidate's personal/campaign contact over a generic office address when both appear.
-- Extract a phone number ONLY if one is explicitly present in the search results. Do NOT invent, guess, or infer phone numbers.
-- Extract a LinkedIn profile URL if one is present. Must be a full URL starting with "https://www.linkedin.com/in/" or similar; null otherwise.
-- Extract a campaign or personal website URL if one is present (not a news article or social profile). Null if not found.
-- List the URLs from search results where you found contact information.
-- Rate your confidence from 0.0 to 1.0 that this is the correct candidate (not a different person with the same name).
-- Add brief notes about ambiguity or anything unusual.
-
-Respond with ONLY valid JSON in this exact format:
-{
-  "email": "string or null",
-  "phone": "string or null",
-  "linkedin": "string or null",
-  "website": "string or null",
-  "sourceUrls": ["url1", "url2"],
-  "confidence": 0.0,
-  "notes": "string or null"
-}`;
-  }
+  // ---- Audit helpers ----
 
   async getAudit(): Promise<MatchAuditJson | null> {
     return getEnrichmentAudit(ENTITY_TYPE, this.entityId);
   }
 
-  async updateAudit(patch: Partial<Omit<MatchAuditJson, "general" | "contact">>): Promise<void> {
+  async updateAudit(
+    patch: Partial<Pick<MatchAuditJson, "runId" | "startedAt" | "completedAt" | "errors">>
+  ): Promise<void> {
     return updateEnrichmentAudit(ENTITY_TYPE, this.entityId, patch);
   }
 
-  async updateTrack(track: TrackKind, patch: Partial<TrackAudit>): Promise<void> {
+  async updateTrack(track: CandidateTrackId, patch: Partial<TrackAudit>): Promise<void> {
     return updateEnrichmentTrack(ENTITY_TYPE, this.entityId, track, patch);
   }
 
-  async appendError(error: { message: string; timestamp: string; track?: TrackKind }): Promise<void> {
+  async appendError(error: { message: string; timestamp: string; track?: CandidateTrackId }): Promise<void> {
     return appendEnrichmentError(ENTITY_TYPE, this.entityId, error);
   }
 
-  async saveTrackResult(
-    track: TrackKind,
-    parsed: GeneralParsedResult | ContactParsedResult,
-    audit: MatchAuditJson
-  ): Promise<void> {
-    if (track === "general") {
-      await this.saveGeneral(parsed as GeneralParsedResult, audit);
-    } else {
-      await this.saveContact(parsed as ContactParsedResult, audit);
-    }
-  }
+  // ---- Track-specific saves ----
 
   private async saveGeneral(parsed: GeneralParsedResult, audit: MatchAuditJson): Promise<void> {
     const { candidate, electionLink } = this;
@@ -358,7 +252,7 @@ Respond with ONLY valid JSON in this exact format:
 
     if (parsed.confidence !== undefined) finalSavedFields.confidence = parsed.confidence;
 
-    await this.commitTrack("general", audit, finalSavedFields, parsed);
+    await this.commitTrack("general", audit, finalSavedFields, parsed as unknown as Record<string, unknown>);
   }
 
   private async saveContact(parsed: ContactParsedResult, audit: MatchAuditJson): Promise<void> {
@@ -421,29 +315,32 @@ Respond with ONLY valid JSON in this exact format:
       },
     });
 
-    await this.commitTrack("contact", audit, finalSavedFields, parsed);
+    await this.commitTrack("contact", audit, finalSavedFields, parsed as unknown as Record<string, unknown>);
   }
 
   private async commitTrack(
-    track: TrackKind,
-    audit: MatchAuditJson,
+    track: CandidateTrackId,
+    _audit: MatchAuditJson,
     finalSavedFields: Record<string, unknown>,
-    parsed: GeneralParsedResult | ContactParsedResult
+    parsed: Record<string, unknown>
   ): Promise<void> {
+    // Atomic per-track write — the racing other-track's writes are untouched.
+    await updateEnrichmentTrack(ENTITY_TYPE, this.entityId, track, {
+      status: "result_saved",
+      parsedResult: parsed,
+      finalSavedFields,
+    });
+    // Stamp completedAt only when every track has saved. Re-read after the
+    // atomic patch so we observe the other track's current status.
     const fresh = await getEnrichmentAudit(ENTITY_TYPE, this.entityId);
-    const base = fresh ?? audit;
-    const updated: MatchAuditJson = {
-      ...base,
-      [track]: {
-        ...base[track],
-        status: "result_saved",
-        parsedResult: parsed,
-        finalSavedFields,
-      },
-    };
-    if (updated.general.status === "result_saved" && updated.contact.status === "result_saved") {
-      updated.completedAt = new Date().toISOString();
+    if (
+      fresh &&
+      fresh.general?.status === "result_saved" &&
+      fresh.contact?.status === "result_saved"
+    ) {
+      await updateEnrichmentAudit(ENTITY_TYPE, this.entityId, {
+        completedAt: new Date().toISOString(),
+      });
     }
-    await replaceEnrichmentAudit(ENTITY_TYPE, this.entityId, updated);
   }
 }

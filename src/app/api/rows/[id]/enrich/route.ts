@@ -23,13 +23,12 @@ export async function POST(
     // no body or invalid JSON — use default
   }
 
-  const modes = normalizePipelineMode(rawMode);
-  if (modes.length === 0) {
-    return NextResponse.json({ error: `Unknown mode: ${rawMode}` }, { status: 400 });
-  }
-
   try {
     const adapter = await CandidateIntakeAdapter.create(rowId);
+    const modes = normalizePipelineMode(adapter, rawMode);
+    if (modes.length === 0) {
+      return NextResponse.json({ error: `Unknown mode: ${rawMode}` }, { status: 400 });
+    }
     for (const mode of modes) {
       await runEnrichmentPipeline(adapter, mode);
     }

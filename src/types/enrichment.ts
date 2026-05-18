@@ -1,3 +1,9 @@
+import type {
+  EntityKind,
+  TrackIdFor,
+  AnyTrackId,
+} from "@/lib/enrichment/registry";
+
 export type EnrichmentStatus =
   | "not_started"
   | "search_queued"
@@ -10,7 +16,8 @@ export type EnrichmentStatus =
   | "failed"
   | "needs_review";
 
-export type TrackKind = "general" | "contact";
+/** Legacy alias — prefer `AnyTrackId` (cross-entity) or `TrackIdFor<K>` (entity-scoped). */
+export type TrackKind = AnyTrackId;
 
 export interface GeneralParsedResult {
   biography?: string;
@@ -33,10 +40,6 @@ export interface ContactParsedResult {
   notes?: string;
 }
 
-export type ParsedTrackResult<T extends TrackKind = TrackKind> = T extends "general"
-  ? GeneralParsedResult
-  : ContactParsedResult;
-
 export interface TrackAudit {
   status: EnrichmentStatus;
   searchQuery?: string;
@@ -45,18 +48,24 @@ export interface TrackAudit {
   selectedSources?: TavilyResult[];
   geminiPrompt?: string;
   geminiRawResponse?: string;
-  parsedResult?: GeneralParsedResult | ContactParsedResult;
+  parsedResult?: Record<string, unknown>;
   finalSavedFields?: Record<string, unknown>;
 }
 
-export interface MatchAuditJson {
+/**
+ * Mapped-type audit: top-level fixed fields + every `AnyTrackId` as a
+ * top-level `TrackAudit` key. New entity kinds / tracks added to the registry
+ * automatically expand this type without a DB migration — absent track keys
+ * default to `not_started` at read time.
+ */
+export type MatchAuditJson = {
   runId: string;
   startedAt: string;
   completedAt?: string;
-  general: TrackAudit;
-  contact: TrackAudit;
-  errors?: { message: string; timestamp: string; track?: TrackKind }[];
-}
+  errors?: { message: string; timestamp: string; track?: AnyTrackId }[];
+} & {
+  [K in AnyTrackId]?: TrackAudit;
+};
 
 export interface TavilyResult {
   title: string;
@@ -71,24 +80,37 @@ export interface TavilySearchResponse {
   answer?: string;
 }
 
-export interface EntityAdapter {
+export interface NameParts {
+  firstName?: string | null;
+  lastName?: string | null;
+  fullNameRaw?: string | null;
+}
+
+/**
+ * Per-track adapter logic. Each adapter exposes one of these per track id its
+ * entity kind supports, via `tracks: Record<TrackIdFor<K>, AdapterTrack>`.
+ */
+export interface AdapterTrack {
+  buildSearchQuery: () => string;
+  buildGeminiPrompt: (sources: TavilyResult[]) => string | Promise<string>;
+  save: (parsed: Record<string, unknown>, audit: MatchAuditJson) => Promise<void>;
+}
+
+export interface EntityAdapter<K extends EntityKind = EntityKind> {
+  readonly entityKind: K;
   readonly entityId: number;
   readonly logContext: { rowId: number; submissionId?: number };
-  readonly nameParts: { firstName?: string | null; lastName?: string | null; fullNameRaw?: string | null };
-
-  buildSearchQuery(track: TrackKind): string;
-  buildGeminiPrompt(track: TrackKind, sources: TavilyResult[]): Promise<string> | string;
+  readonly nameParts: NameParts;
+  /** Exhaustive map of this entity kind's tracks to their per-track logic. */
+  readonly tracks: Record<TrackIdFor<K>, AdapterTrack>;
 
   getAudit(): Promise<MatchAuditJson | null>;
-  /** Patch top-level audit fields (errors, completedAt, runId, etc). */
-  updateAudit(patch: Partial<Omit<MatchAuditJson, "general" | "contact">>): Promise<void>;
-  /** Deep-merge a partial TrackAudit into the named track. */
-  updateTrack(track: TrackKind, patch: Partial<TrackAudit>): Promise<void>;
-  saveTrackResult(
-    track: TrackKind,
-    parsed: GeneralParsedResult | ContactParsedResult,
-    audit: MatchAuditJson
+  /** Patch top-level audit fields only. */
+  updateAudit(
+    patch: Partial<Pick<MatchAuditJson, "runId" | "startedAt" | "completedAt" | "errors">>
   ): Promise<void>;
-  /** Append a single error entry to the top-level audit error log. */
-  appendError(error: { message: string; timestamp: string; track?: TrackKind }): Promise<void>;
+  /** Deep-merge a partial TrackAudit into the named track. */
+  updateTrack(track: TrackIdFor<K>, patch: Partial<TrackAudit>): Promise<void>;
+  /** Append a single error entry to the top-level error log. */
+  appendError(error: { message: string; timestamp: string; track?: TrackIdFor<K> }): Promise<void>;
 }

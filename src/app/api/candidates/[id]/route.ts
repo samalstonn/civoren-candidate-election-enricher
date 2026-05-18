@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { LiveCandidateAdapter } from "@/lib/enrichment/adapters/live-candidate";
+import { trackIds } from "@/lib/enrichment/registry";
 
 export async function GET(
   _req: Request,
@@ -57,6 +59,18 @@ export async function GET(
 
   const electionLink = candidate.elections[0] ?? null;
 
+  // Compute deterministic, side-effect-free search-query previews so the UI
+  // can show them in the artifacts section before the user runs anything.
+  let previewQueries: Record<string, string> = {};
+  try {
+    const adapter = await LiveCandidateAdapter.create(candidateId);
+    for (const id of trackIds("candidate")) {
+      previewQueries[id] = adapter.tracks[id].buildSearchQuery();
+    }
+  } catch {
+    previewQueries = {};
+  }
+
   return NextResponse.json({
     id: candidate.id,
     name: candidate.name,
@@ -87,5 +101,6 @@ export async function GET(
           updatedAt: enrichmentRecord.updatedAt.toISOString(),
         }
       : null,
+    previewQueries,
   });
 }

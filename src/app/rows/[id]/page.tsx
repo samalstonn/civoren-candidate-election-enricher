@@ -3,7 +3,41 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import type { MatchAuditJson } from "@/types/enrichment";
+import type { MatchAuditJson, TrackAudit } from "@/types/enrichment";
+import { ENTITIES, type TrackIdFor } from "@/lib/enrichment/registry";
+import type { PipelineModeFor } from "@/lib/enrichment/pipeline";
+
+type CandidateTrackId = TrackIdFor<"candidate">;
+type Mode = PipelineModeFor<"candidate"> | "search" | "search_general" | "search_contact" | "gemini" | "save";
+const CANDIDATE_TRACKS = ENTITIES.candidate.tracks;
+
+const ACCENT_CLASSES: Record<string, { button: string; pill: string }> = {
+  gray: {
+    button: "bg-gray-50 hover:bg-gray-100 text-gray-500 border-gray-200",
+    pill: "bg-gray-100 text-gray-500",
+  },
+  blue: {
+    button: "bg-blue-50 hover:bg-blue-100 text-blue-600 border-blue-200",
+    pill: "bg-blue-50 text-blue-600",
+  },
+  amber: {
+    button: "bg-amber-50 hover:bg-amber-100 text-amber-700 border-amber-200",
+    pill: "bg-amber-50 text-amber-700",
+  },
+  green: {
+    button: "bg-green-50 hover:bg-green-100 text-green-700 border-green-200",
+    pill: "bg-green-50 text-green-700",
+  },
+  purple: {
+    button: "bg-purple-50 hover:bg-purple-100 text-purple-700 border-purple-200",
+    pill: "bg-purple-50 text-purple-600",
+  },
+};
+
+function accentFor(trackId: string): { button: string; pill: string } {
+  const t = CANDIDATE_TRACKS.find((tr) => tr.id === trackId);
+  return ACCENT_CLASSES[t?.accent ?? "gray"] ?? ACCENT_CLASSES.gray;
+}
 
 interface Row {
   id: number;
@@ -23,6 +57,7 @@ interface Row {
   matchAuditJson: MatchAuditJson | null;
   reviewerNotes: string | null;
   updatedAt: string;
+  previewQueries?: Record<string, string>;
   submission: {
     id: number;
     targetState: string | null;
@@ -145,7 +180,7 @@ export default function RowDetailPage() {
   const [row, setRow] = useState<Row | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [running, setRunning] = useState<"search" | "search_general" | "search_contact" | "gemini" | "save" | "full" | null>(null);
+  const [running, setRunning] = useState<Mode | null>(null);
   const [logSummary, setLogSummary] = useState<{ apiType: string; calls: number; totalTokens: number | null; totalCostUsd: number | null }[]>([]);
 
   const load = useCallback(() => {
@@ -168,7 +203,7 @@ export default function RowDetailPage() {
     load();
   }, [load]);
 
-  async function runMode(mode: "search" | "search_general" | "search_contact" | "gemini" | "save" | "full") {
+  async function runMode(mode: Mode) {
     setRunning(mode);
     try {
       await fetch(`/api/rows/${params.id}/enrich`, {
@@ -187,11 +222,16 @@ export default function RowDetailPage() {
   if (!row) return null;
 
   const audit = row.matchAuditJson;
-  const general = audit?.general;
-  const contact = audit?.contact;
-  // Intake page renders the general track as primary; fall back to contact for
-  // legacy intake rows where parsedResult might have lived under contact.
-  const generalParsed = general?.parsedResult as
+  const trackAuditFor = (id: CandidateTrackId): TrackAudit | undefined =>
+    audit?.[id] as TrackAudit | undefined;
+  const anyHasSources = CANDIDATE_TRACKS.some(
+    (t) => (trackAuditFor(t.id as CandidateTrackId)?.selectedSources?.length ?? 0) > 0
+  );
+  const anyHasParsed = CANDIDATE_TRACKS.some(
+    (t) => !!trackAuditFor(t.id as CandidateTrackId)?.parsedResult
+  );
+  // Intake page surfaces "general" fields as the primary saved values.
+  const generalParsed = trackAuditFor("general" as CandidateTrackId)?.parsedResult as
     | {
         biography?: string;
         currentRole?: string | null;
@@ -239,44 +279,44 @@ export default function RowDetailPage() {
         </div>
 
         <div className="flex flex-col gap-2 items-end">
-          <div className="flex gap-2">
+          <div className="flex gap-2 flex-wrap justify-end">
+            {/* Per-track "Run Search" buttons, generated from the registry */}
             <div className="flex flex-col gap-1">
               <button
                 onClick={() => runMode("search")}
                 disabled={isRunning}
                 className="text-xs px-3 py-2 bg-gray-100 hover:bg-gray-200 disabled:opacity-40 disabled:cursor-not-allowed text-gray-700 font-medium rounded border border-gray-200 transition-colors"
               >
-                {running === "search" ? "Running..." : "Run Search (Both)"}
+                {running === "search" ? "Running..." : "Run Search (All)"}
               </button>
               <div className="flex gap-1">
-                <button
-                  onClick={() => runMode("search_general")}
-                  disabled={isRunning}
-                  className="text-xs px-2 py-1 bg-gray-50 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed text-gray-500 font-medium rounded border border-gray-200 transition-colors flex-1"
-                >
-                  {running === "search_general" ? "Running..." : "General"}
-                </button>
-                <button
-                  onClick={() => runMode("search_contact")}
-                  disabled={isRunning}
-                  className="text-xs px-2 py-1 bg-blue-50 hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed text-blue-600 font-medium rounded border border-blue-200 transition-colors flex-1"
-                >
-                  {running === "search_contact" ? "Running..." : "Contact"}
-                </button>
+                {CANDIDATE_TRACKS.map((t) => {
+                  const modeKey = `${t.id}_search` as Mode;
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => runMode(modeKey)}
+                      disabled={isRunning}
+                      className={`text-xs px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed font-medium rounded border transition-colors flex-1 ${accentFor(t.id).button}`}
+                    >
+                      {running === modeKey ? "Running..." : t.label}
+                    </button>
+                  );
+                })}
               </div>
             </div>
             <button
               onClick={() => runMode("gemini")}
-              disabled={isRunning || !(general?.selectedSources?.length || contact?.selectedSources?.length)}
-              title={!(general?.selectedSources?.length || contact?.selectedSources?.length) ? "Run Search first" : undefined}
+              disabled={isRunning || !anyHasSources}
+              title={!anyHasSources ? "Run Search first" : undefined}
               className="text-xs px-3 py-2 bg-purple-50 hover:bg-purple-100 disabled:opacity-40 disabled:cursor-not-allowed text-purple-700 font-medium rounded border border-purple-200 transition-colors"
             >
               {running === "gemini" ? "Running..." : "Run Gemini"}
             </button>
             <button
               onClick={() => runMode("save")}
-              disabled={isRunning || !(general?.parsedResult || contact?.parsedResult)}
-              title={!(general?.parsedResult || contact?.parsedResult) ? "Run Gemini first" : undefined}
+              disabled={isRunning || !anyHasParsed}
+              title={!anyHasParsed ? "Run Gemini first" : undefined}
               className="text-xs px-3 py-2 bg-green-50 hover:bg-green-100 disabled:opacity-40 disabled:cursor-not-allowed text-green-700 font-medium rounded border border-green-200 transition-colors"
             >
               {running === "save" ? "Saving..." : "Save Result"}
@@ -424,132 +464,97 @@ export default function RowDetailPage() {
           Pipeline Artifacts
         </div>
 
-        {(general?.searchQuery || contact?.searchQuery) && (
+        {/* Combined "Search Queries" section — shows the persisted value when
+            the pipeline has run, otherwise the deterministic preview from the
+            adapter (computed server-side). */}
+        {CANDIDATE_TRACKS.some(
+          (t) =>
+            trackAuditFor(t.id as CandidateTrackId)?.searchQuery ||
+            row.previewQueries?.[t.id]
+        ) && (
           <Section title="Search Queries">
             <div className="space-y-2">
-              {general?.searchQuery && (
-                <div>
-                  <div className="text-xs text-gray-400 mb-1">General</div>
-                  <TextBlock value={general.searchQuery} />
-                </div>
-              )}
-              {contact?.searchQuery && (
-                <div>
-                  <div className="text-xs text-gray-400 mb-1">Contact</div>
-                  <TextBlock value={contact.searchQuery} />
-                </div>
-              )}
-            </div>
-          </Section>
-        )}
-
-        {general?.searchRawResponse !== undefined && (
-          <Section title="Search Raw Response — General (Tavily)">
-            <JsonBlock value={general.searchRawResponse} />
-          </Section>
-        )}
-
-        {contact?.searchRawResponse !== undefined && (
-          <Section title="Search Raw Response — Contact (Tavily)">
-            <JsonBlock value={contact.searchRawResponse} />
-          </Section>
-        )}
-
-        {general?.rankedSources && general.rankedSources.length > 0 && (
-          <Section title={`General — Ranked Sources (${general.rankedSources.length})`}>
-            <div className="space-y-0.5">
-              {general.rankedSources.map((s, i) => (
-                <RankedSourceRow key={i} source={s} rank={i + 1} selected={i < 5} />
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {contact?.rankedSources && contact.rankedSources.length > 0 && (
-          <Section title={`Contact — Ranked Sources (${contact.rankedSources.length})`}>
-            <div className="space-y-0.5">
-              {contact.rankedSources.map((s, i) => (
-                <RankedSourceRow key={i} source={s} rank={i + 1} selected={i < 5} />
-              ))}
-            </div>
-          </Section>
-        )}
-
-        {((general?.selectedSources?.length ?? 0) > 0 || (contact?.selectedSources?.length ?? 0) > 0) && (
-          <Section title={`Selected Sources (${(general?.selectedSources?.length ?? 0) + (contact?.selectedSources?.length ?? 0)})`}>
-            <div className="space-y-3">
-              {[
-                ...(general?.selectedSources ?? []).map((s) => ({ s, track: "general" as const })),
-                ...(contact?.selectedSources ?? []).map((s) => ({ s, track: "contact" as const })),
-              ].map(({ s, track }, i) => (
-                <div key={i} className="bg-gray-50 border border-gray-100 rounded p-3">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="text-xs text-amber-700 font-medium">{s.title}</span>
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded font-medium ${
-                        track === "contact"
-                          ? "bg-blue-50 text-blue-600"
-                          : "bg-gray-100 text-gray-500"
-                      }`}
-                    >
-                      {track}
-                    </span>
+              {CANDIDATE_TRACKS.map((t) => {
+                const persisted = trackAuditFor(t.id as CandidateTrackId)?.searchQuery;
+                const preview = row.previewQueries?.[t.id];
+                const value = persisted ?? preview;
+                if (!value) return null;
+                const isPreview = !persisted && !!preview;
+                return (
+                  <div key={t.id}>
+                    <div className="text-xs text-gray-400 mb-1">
+                      {t.label}
+                      {isPreview && <span className="ml-1 text-gray-300">(preview)</span>}
+                    </div>
+                    <TextBlock value={value} />
                   </div>
-                  <div className="text-xs text-blue-600 mb-2 break-all">{s.url}</div>
-                  <div className="text-xs text-gray-500 line-clamp-4">{s.content}</div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Section>
         )}
 
-        {general?.geminiPrompt && (
-          <Section title="Gemini Prompt — General">
-            <TextBlock value={general.geminiPrompt} />
-          </Section>
-        )}
-
-        {contact?.geminiPrompt && (
-          <Section title="Gemini Prompt — Contact">
-            <TextBlock value={contact.geminiPrompt} />
-          </Section>
-        )}
-
-        {general?.geminiRawResponse && (
-          <Section title="Gemini Raw Response — General">
-            <TextBlock value={general.geminiRawResponse} />
-          </Section>
-        )}
-
-        {contact?.geminiRawResponse && (
-          <Section title="Gemini Raw Response — Contact">
-            <TextBlock value={contact.geminiRawResponse} />
-          </Section>
-        )}
-
-        {general?.parsedResult && (
-          <Section title="Parsed Result — General">
-            <JsonBlock value={general.parsedResult} />
-          </Section>
-        )}
-
-        {contact?.parsedResult && (
-          <Section title="Parsed Result — Contact">
-            <JsonBlock value={contact.parsedResult} />
-          </Section>
-        )}
-
-        {general?.finalSavedFields && (
-          <Section title="Saved Fields — General">
-            <JsonBlock value={general.finalSavedFields} />
-          </Section>
-        )}
-
-        {contact?.finalSavedFields && (
-          <Section title="Saved Fields — Contact">
-            <JsonBlock value={contact.finalSavedFields} />
-          </Section>
-        )}
+        {/* Per-track artifact sections, generated from the registry */}
+        {CANDIDATE_TRACKS.map((t) => {
+          const ta = trackAuditFor(t.id as CandidateTrackId);
+          if (!ta) return null;
+          return (
+            <div key={t.id}>
+              {ta.searchRawResponse !== undefined && (
+                <Section title={`${t.label} — Search Raw Response (Tavily)`}>
+                  <JsonBlock value={ta.searchRawResponse} />
+                </Section>
+              )}
+              {ta.rankedSources && ta.rankedSources.length > 0 && (
+                <Section title={`${t.label} — Ranked Sources (${ta.rankedSources.length})`}>
+                  <div className="space-y-0.5">
+                    {ta.rankedSources.map((s, i) => (
+                      <RankedSourceRow key={i} source={s} rank={i + 1} selected={i < 5} />
+                    ))}
+                  </div>
+                </Section>
+              )}
+              {ta.selectedSources && ta.selectedSources.length > 0 && (
+                <Section title={`${t.label} — Selected Sources (${ta.selectedSources.length})`}>
+                  <div className="space-y-3">
+                    {ta.selectedSources.map((s, i) => (
+                      <div key={i} className="bg-gray-50 border border-gray-100 rounded p-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-xs text-amber-700 font-medium">{s.title}</span>
+                          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${accentFor(t.id).pill}`}>
+                            {t.label.toLowerCase()}
+                          </span>
+                        </div>
+                        <div className="text-xs text-blue-600 mb-2 break-all">{s.url}</div>
+                        <div className="text-xs text-gray-500 line-clamp-4">{s.content}</div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+              {ta.geminiPrompt && (
+                <Section title={`${t.label} — Gemini Prompt`}>
+                  <TextBlock value={ta.geminiPrompt} />
+                </Section>
+              )}
+              {ta.geminiRawResponse && (
+                <Section title={`${t.label} — Gemini Raw Response`}>
+                  <TextBlock value={ta.geminiRawResponse} />
+                </Section>
+              )}
+              {ta.parsedResult && (
+                <Section title={`${t.label} — Parsed Result`}>
+                  <JsonBlock value={ta.parsedResult} />
+                </Section>
+              )}
+              {ta.finalSavedFields && (
+                <Section title={`${t.label} — Saved Fields`}>
+                  <JsonBlock value={ta.finalSavedFields} />
+                </Section>
+              )}
+            </div>
+          );
+        })}
 
         {audit?.errors && audit.errors.length > 0 && (
           <Section title={`Errors (${audit.errors.length})`}>
@@ -573,7 +578,7 @@ export default function RowDetailPage() {
           </Section>
         )}
 
-        {!audit && (
+        {!audit && !Object.keys(row.previewQueries ?? {}).length && (
           <div className="text-xs text-gray-400 py-8 text-center">
             No pipeline run yet. Click Re-run Enrichment to start.
           </div>

@@ -1,58 +1,84 @@
 import { runSearch } from "./runSearch";
 import { callGemini } from "./callGemini";
-import { parseTrackResult } from "./parseGeminiResult";
 import { enrichWithTranscripts } from "./fetchYouTubeTranscript";
 import { injectContactPages } from "./fetchContactPage";
 import { enrichThinSources } from "./fetchThinSources";
 import type {
   EntityAdapter,
-  MatchAuditJson,
   TavilyResult,
-  TrackAudit,
-  TrackKind,
-  GeneralParsedResult,
-  ContactParsedResult,
 } from "@/types/enrichment";
+import {
+  getTrack,
+  trackIds,
+  type EntityKind,
+  type TrackIdFor,
+} from "./registry";
 
-export type PipelineMode =
+type Stage = "search" | "gemini" | "save";
+type StageFlags = { search: boolean; gemini: boolean; save: boolean };
+
+/**
+ * PipelineMode is generic over entity kind: a candidate-adapter pipeline call
+ * accepts `"full" | "general_full" | "general_search" | ...` while a future
+ * election-adapter pipeline accepts `"full" | "metadata_full" | ...`.
+ *
+ * `"full"` always means "all tracks for this adapter's kind, end-to-end".
+ */
+export type PipelineModeFor<K extends EntityKind> =
   | "full"
-  | "general_full"
-  | "contact_full"
-  | "general_search"
-  | "contact_search"
-  | "general_gemini"
-  | "contact_gemini"
-  | "general_save"
-  | "contact_save";
+  | `${TrackIdFor<K>}_full`
+  | `${TrackIdFor<K>}_search`
+  | `${TrackIdFor<K>}_gemini`
+  | `${TrackIdFor<K>}_save`;
 
-/** Map legacy mode strings onto the new split-pipeline modes. */
-export function normalizePipelineMode(raw: string): PipelineMode[] {
+/** Convenience alias when the caller doesn't have the kind narrowed. */
+export type PipelineMode = PipelineModeFor<EntityKind>;
+
+/**
+ * Map legacy mode strings (or new ones) into the canonical list of modes the
+ * pipeline runs. The legacy strings `"search" | "gemini" | "save"` fan out to
+ * one mode per track for the adapter's kind.
+ */
+export function normalizePipelineMode<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  raw: string
+): PipelineModeFor<K>[] {
+  const kind = adapter.entityKind;
+  const ids = trackIds(kind);
+  const allFull: PipelineModeFor<K>[] = ["full"];
+  const allSearch = ids.map((id) => `${id}_search` as PipelineModeFor<K>);
+  const allGemini = ids.map((id) => `${id}_gemini` as PipelineModeFor<K>);
+  const allSave = ids.map((id) => `${id}_save` as PipelineModeFor<K>);
+
+  // Legacy mappings:
   switch (raw) {
-    // New modes pass through.
-    case "full":
-    case "general_full":
-    case "contact_full":
-    case "general_search":
-    case "contact_search":
-    case "general_gemini":
-    case "contact_gemini":
-    case "general_save":
-    case "contact_save":
-      return [raw];
-    // Legacy compatibility:
     case "search":
-      return ["general_search", "contact_search"];
-    case "search_general":
-      return ["general_search"];
-    case "search_contact":
-      return ["contact_search"];
+      return allSearch;
     case "gemini":
-      return ["general_gemini", "contact_gemini"];
+      return allGemini;
     case "save":
-      return ["general_save", "contact_save"];
-    default:
-      return [];
+      return allSave;
+    case "search_general":
+      return ids.includes("general" as TrackIdFor<K>)
+        ? [`general_search` as PipelineModeFor<K>]
+        : [];
+    case "search_contact":
+      return ids.includes("contact" as TrackIdFor<K>)
+        ? [`contact_search` as PipelineModeFor<K>]
+        : [];
+    case "full":
+      return allFull;
   }
+
+  // New shape: validate against the registry.
+  if (raw.endsWith("_full") || raw.endsWith("_search") || raw.endsWith("_gemini") || raw.endsWith("_save")) {
+    const lastUnderscore = raw.lastIndexOf("_");
+    const trackId = raw.slice(0, lastUnderscore);
+    if (ids.includes(trackId as TrackIdFor<K>)) {
+      return [raw as PipelineModeFor<K>];
+    }
+  }
+  return [];
 }
 
 const BLOCKED_DOMAINS = ["instagram.com", "tiktok.com", "twitter.com", "x.com"];
@@ -93,13 +119,11 @@ function prioritizeSources(
         break;
       }
     }
-
     return points;
   }
 
   const scored = results.map((s) => ({ source: s, score: computeScore(s) }));
   scored.sort((a, b) => b.score - a.score);
-
   return {
     sorted: scored.map((s) => s.source),
     ranked: scored.map((s) => ({
@@ -122,17 +146,23 @@ function filterSources(results: TavilyResult[]): TavilyResult[] {
   });
 }
 
-async function runTrackSearch(adapter: EntityAdapter, track: TrackKind): Promise<TavilyResult[]> {
-  await adapter.updateTrack(track, { status: "search_queued" });
-  const searchQuery = adapter.buildSearchQuery(track);
-  await adapter.updateTrack(track, { status: "search_running", searchQuery });
+async function runTrackSearch<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  trackId: TrackIdFor<K>
+): Promise<TavilyResult[]> {
+  const trackDef = getTrack(adapter.entityKind, trackId);
+  const adapterTrack = adapter.tracks[trackId];
+
+  await adapter.updateTrack(trackId, { status: "search_queued" });
+  const searchQuery = adapterTrack.buildSearchQuery();
+  await adapter.updateTrack(trackId, { status: "search_running", searchQuery });
 
   let raw;
   try {
     raw = await runSearch(searchQuery, adapter.logContext);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await adapter.updateTrack(track, {
+    await adapter.updateTrack(trackId, {
       searchRawResponse: { error: msg },
       status: "failed",
     });
@@ -141,39 +171,39 @@ async function runTrackSearch(adapter: EntityAdapter, track: TrackKind): Promise
 
   const results = raw.results ?? [];
   const filtered = filterSources(results);
-  // Contact pages and thin-source fetches matter most for the contact track,
-  // but transcripts/thin-source fill-in helps general too. Keep both enabled.
-  const withContactPages =
-    track === "contact"
-      ? await injectContactPages(filtered, adapter.nameParts)
-      : filtered;
+  const withContactPages = trackDef.injectContactPages
+    ? await injectContactPages(filtered, adapter.nameParts)
+    : filtered;
   const withTranscripts = await enrichWithTranscripts(withContactPages);
   const withFetched = await enrichThinSources(withTranscripts);
   const { sorted, ranked } = prioritizeSources(withFetched, adapter.nameParts);
   const selectedSources = sorted.slice(0, 5);
 
-  await adapter.updateTrack(track, {
+  await adapter.updateTrack(trackId, {
     status: "search_complete",
     searchRawResponse: raw,
     rankedSources: ranked,
     selectedSources,
   });
 
-  // Pre-bake the prompt so the UI can show it before the user clicks Run Gemini.
-  const geminiPrompt = await adapter.buildGeminiPrompt(track, selectedSources);
-  await adapter.updateTrack(track, { geminiPrompt });
+  // Pre-bake the prompt so the UI can show it before Gemini runs.
+  const geminiPrompt = await adapterTrack.buildGeminiPrompt(selectedSources);
+  await adapter.updateTrack(trackId, { geminiPrompt });
 
   return selectedSources;
 }
 
-async function runTrackGemini(
-  adapter: EntityAdapter,
-  track: TrackKind,
+async function runTrackGemini<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  trackId: TrackIdFor<K>,
   selectedSources: TavilyResult[]
-): Promise<GeneralParsedResult | ContactParsedResult> {
-  await adapter.updateTrack(track, { status: "gemini_queued" });
-  const geminiPrompt = await adapter.buildGeminiPrompt(track, selectedSources);
-  await adapter.updateTrack(track, { status: "gemini_running", geminiPrompt });
+): Promise<Record<string, unknown>> {
+  const trackDef = getTrack(adapter.entityKind, trackId);
+  const adapterTrack = adapter.tracks[trackId];
+
+  await adapter.updateTrack(trackId, { status: "gemini_queued" });
+  const geminiPrompt = await adapterTrack.buildGeminiPrompt(selectedSources);
+  await adapter.updateTrack(trackId, { status: "gemini_running", geminiPrompt });
 
   let rawText: string;
   try {
@@ -181,122 +211,125 @@ async function runTrackGemini(
     rawText = result.text;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await adapter.updateTrack(track, {
+    await adapter.updateTrack(trackId, {
       geminiPrompt,
       geminiRawResponse: msg,
       status: "failed",
     });
     throw err;
   }
-  await adapter.updateTrack(track, { geminiRawResponse: rawText });
+  await adapter.updateTrack(trackId, { geminiRawResponse: rawText });
 
-  let parsed: GeneralParsedResult | ContactParsedResult;
+  let parsed: Record<string, unknown>;
   try {
-    parsed = parseTrackResult(track, rawText);
+    parsed = trackDef.parseResult(rawText);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await adapter.updateTrack(track, {
+    await adapter.updateTrack(trackId, {
       geminiRawResponse: rawText,
       status: "failed",
     });
     throw new Error(msg);
   }
 
-  await adapter.updateTrack(track, { parsedResult: parsed, status: "gemini_complete" });
+  await adapter.updateTrack(trackId, { parsedResult: parsed, status: "gemini_complete" });
   return parsed;
 }
 
-async function runTrackSave(
-  adapter: EntityAdapter,
-  track: TrackKind,
-  parsed: GeneralParsedResult | ContactParsedResult
+async function runTrackSave<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  trackId: TrackIdFor<K>,
+  parsed: Record<string, unknown>
 ): Promise<void> {
   const audit = await adapter.getAudit();
   if (!audit) throw new Error("No audit found before save — run search/gemini first.");
-  await adapter.saveTrackResult(track, parsed, audit);
+  await adapter.tracks[trackId].save(parsed, audit);
 }
 
-async function runTrack(
-  adapter: EntityAdapter,
-  track: TrackKind,
-  stages: { search: boolean; gemini: boolean; save: boolean }
+async function runTrack<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  trackId: TrackIdFor<K>,
+  stages: StageFlags
 ): Promise<void> {
   try {
     let selectedSources: TavilyResult[] | undefined;
-    let parsed: GeneralParsedResult | ContactParsedResult | undefined;
+    let parsed: Record<string, unknown> | undefined;
 
     if (stages.search) {
-      selectedSources = await runTrackSearch(adapter, track);
+      selectedSources = await runTrackSearch(adapter, trackId);
     } else if (stages.gemini || stages.save) {
       const audit = await adapter.getAudit();
-      selectedSources = audit?.[track].selectedSources;
+      selectedSources = audit?.[trackId as keyof typeof audit] && typeof audit[trackId as keyof typeof audit] === "object"
+        ? (audit[trackId as keyof typeof audit] as { selectedSources?: TavilyResult[] })?.selectedSources
+        : undefined;
     }
 
     if (stages.gemini) {
       if (!selectedSources || selectedSources.length === 0) {
-        throw new Error(`No ${track} search results — run search first.`);
+        throw new Error(`No ${String(trackId)} search results — run search first.`);
       }
-      parsed = await runTrackGemini(adapter, track, selectedSources);
+      parsed = await runTrackGemini(adapter, trackId, selectedSources);
     } else if (stages.save) {
       const audit = await adapter.getAudit();
-      parsed = audit?.[track].parsedResult;
+      const trackAudit = audit?.[trackId as keyof typeof audit];
+      parsed =
+        trackAudit && typeof trackAudit === "object" && "parsedResult" in trackAudit
+          ? (trackAudit as { parsedResult?: Record<string, unknown> }).parsedResult
+          : undefined;
     }
 
     if (stages.save) {
       if (!parsed) {
-        throw new Error(`No ${track} parsed result — run gemini first.`);
+        throw new Error(`No ${String(trackId)} parsed result — run gemini first.`);
       }
-      await runTrackSave(adapter, track, parsed);
+      await runTrackSave(adapter, trackId, parsed);
     }
   } catch (err) {
-    // Inner stage helpers already flipped the track status to "failed" and
-    // captured stage-specific raw context. We add the user-visible error to
-    // the top-level errors[] log so the UI can render it.
     const message = err instanceof Error ? err.message : String(err);
     await adapter
-      .appendError({ message, timestamp: new Date().toISOString(), track })
+      .appendError({ message, timestamp: new Date().toISOString(), track: trackId })
       .catch(() => {});
-    // Ensure the track is marked failed even if the inner helper missed it
-    // (e.g. for the "no search results" / "no parsed result" guards above).
-    await adapter.updateTrack(track, { status: "failed" }).catch(() => {});
+    await adapter.updateTrack(trackId, { status: "failed" }).catch(() => {});
     throw err;
   }
 }
 
-function stagesForMode(mode: PipelineMode): {
-  general: { search: boolean; gemini: boolean; save: boolean } | null;
-  contact: { search: boolean; gemini: boolean; save: boolean } | null;
-} {
-  const all = { search: true, gemini: true, save: true };
-  switch (mode) {
-    case "full":
-      return { general: all, contact: all };
-    case "general_full":
-      return { general: all, contact: null };
-    case "contact_full":
-      return { general: null, contact: all };
-    case "general_search":
-      return { general: { search: true, gemini: false, save: false }, contact: null };
-    case "contact_search":
-      return { general: null, contact: { search: true, gemini: false, save: false } };
-    case "general_gemini":
-      return { general: { search: false, gemini: true, save: false }, contact: null };
-    case "contact_gemini":
-      return { general: null, contact: { search: false, gemini: true, save: false } };
-    case "general_save":
-      return { general: { search: false, gemini: false, save: true }, contact: null };
-    case "contact_save":
-      return { general: null, contact: { search: false, gemini: false, save: true } };
+function stagesForMode<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  mode: PipelineModeFor<K>
+): Array<{ trackId: TrackIdFor<K>; stages: StageFlags }> {
+  const ids = trackIds(adapter.entityKind);
+  if (mode === "full") {
+    return ids.map((trackId) => ({
+      trackId,
+      stages: { search: true, gemini: true, save: true },
+    }));
   }
+  const raw = mode as string;
+  const lastUnderscore = raw.lastIndexOf("_");
+  const trackId = raw.slice(0, lastUnderscore) as TrackIdFor<K>;
+  const stage = raw.slice(lastUnderscore + 1) as Stage | "full";
+
+  const allStages: StageFlags = { search: true, gemini: true, save: true };
+  const single: Record<Stage, StageFlags> = {
+    search: { search: true, gemini: false, save: false },
+    gemini: { search: false, gemini: true, save: false },
+    save: { search: false, gemini: false, save: true },
+  };
+
+  return [
+    {
+      trackId,
+      stages: stage === "full" ? allStages : single[stage as Stage],
+    },
+  ];
 }
 
-export async function runEnrichmentPipeline(
-  adapter: EntityAdapter,
-  mode: PipelineMode = "full"
+export async function runEnrichmentPipeline<K extends EntityKind>(
+  adapter: EntityAdapter<K>,
+  mode: PipelineModeFor<K> = "full"
 ): Promise<void> {
-  // Ensure base audit fields are seeded so the migration shim doesn't return null
-  // for a brand-new entity. We only touch top-level fields here — track statuses
-  // start at "not_started" via the empty-audit default in enrichmentRecord.ts.
+  // Seed top-level fields so an empty entity still produces a readable audit.
   const existing = await adapter.getAudit();
   if (!existing) {
     await adapter.updateAudit({
@@ -304,8 +337,7 @@ export async function runEnrichmentPipeline(
       startedAt: new Date().toISOString(),
       errors: [],
     });
-  } else if (mode === "full" || mode === "general_full" || mode === "contact_full") {
-    // Stamp a fresh runId on full runs so logs can correlate the new run.
+  } else if (mode === "full" || (mode as string).endsWith("_full")) {
     await adapter.updateAudit({
       runId: crypto.randomUUID(),
       startedAt: new Date().toISOString(),
@@ -313,33 +345,29 @@ export async function runEnrichmentPipeline(
     });
   }
 
-  const { general, contact } = stagesForMode(mode);
-
-  const tasks: Promise<void>[] = [];
-  if (general) tasks.push(runTrack(adapter, "general", general));
-  if (contact) tasks.push(runTrack(adapter, "contact", contact));
-
-  // Run tracks in parallel. We use allSettled so one track's failure doesn't
-  // cancel the other; the failed track will already have its status flipped
-  // to "failed" by the inner runTrackX helpers.
+  const plan = stagesForMode(adapter, mode);
+  const tasks = plan.map(({ trackId, stages }) => runTrack(adapter, trackId, stages));
   const results = await Promise.allSettled(tasks);
 
-  // Stamp completedAt when both tracks have terminal status (saved/failed).
+  // Stamp completedAt if every scheduled track reached a terminal state.
   const after = await adapter.getAudit();
   if (after) {
-    const g = after.general.status;
-    const c = after.contact.status;
-    const terminal = (s: string) => s === "result_saved" || s === "failed";
-    if ((!general || terminal(g)) && (!contact || terminal(c))) {
+    const terminal = (s: string | undefined) => s === "result_saved" || s === "failed";
+    const allTerminal = plan.every(({ trackId }) => {
+      const t = after[trackId as keyof typeof after];
+      const status =
+        t && typeof t === "object" && "status" in t
+          ? (t as { status?: string }).status
+          : undefined;
+      return terminal(status);
+    });
+    if (allTerminal) {
       await adapter.updateAudit({ completedAt: new Date().toISOString() });
     }
   }
 
-  // Surface the first failure to the caller (so the route returns 500).
   const failed = results.find((r) => r.status === "rejected");
   if (failed && failed.status === "rejected") {
     throw failed.reason instanceof Error ? failed.reason : new Error(String(failed.reason));
   }
 }
-
-export type { MatchAuditJson, TrackAudit };

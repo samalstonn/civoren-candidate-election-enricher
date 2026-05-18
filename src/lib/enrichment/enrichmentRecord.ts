@@ -1,19 +1,43 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
-import type {
-  MatchAuditJson,
-  TrackAudit,
-  TrackKind,
-} from "@/types/enrichment";
+import type { MatchAuditJson, TrackAudit } from "@/types/enrichment";
+import {
+  trackIds,
+  type EntityKind,
+  type TrackIdFor,
+  type AnyTrackId,
+} from "./registry";
 import { deriveOverallStatus } from "./auditMigration";
+import {
+  setTrackAtomic,
+  setAuditFieldAtomic,
+  appendErrorAtomic,
+  refreshStatusMirror,
+  type AuditStore,
+} from "./atomicAudit";
 
-function emptyAudit(): MatchAuditJson {
+function storeFor(entityType: string, entityId: number): AuditStore {
+  return {
+    table: "EnrichmentRecord",
+    jsonCol: "matchAuditJson",
+    statusCol: "enrichmentStatus",
+    where: [
+      { col: "entityType", value: entityType },
+      { col: "entityId", value: entityId },
+    ],
+  };
+}
+
+function emptyAudit<K extends EntityKind>(entityKind: K): MatchAuditJson {
+  const seeded: Partial<Record<AnyTrackId, TrackAudit>> = {};
+  for (const id of trackIds(entityKind)) {
+    seeded[id as AnyTrackId] = { status: "not_started" };
+  }
   return {
     runId: crypto.randomUUID(),
     startedAt: new Date().toISOString(),
-    general: { status: "not_started" },
-    contact: { status: "not_started" },
     errors: [],
+    ...seeded,
   };
 }
 
@@ -30,15 +54,78 @@ export async function getEnrichmentAudit(
   return raw as unknown as MatchAuditJson;
 }
 
-async function readCurrent(
-  entityType: string,
+/**
+ * Ensure an `EnrichmentRecord` row exists for this entity, seeded with a
+ * fresh audit skeleton. Idempotent — won't clobber an existing row. Call
+ * this once at the start of any pipeline run before the parallel tracks
+ * begin issuing atomic patches.
+ */
+async function ensureRow<K extends EntityKind>(
+  entityType: K,
   entityId: number
-): Promise<MatchAuditJson> {
-  const existing = await getEnrichmentAudit(entityType, entityId);
-  return existing ?? emptyAudit();
+): Promise<void> {
+  const seed = emptyAudit(entityType);
+  await prisma.enrichmentRecord.upsert({
+    where: { entityType_entityId: { entityType, entityId } },
+    create: {
+      entityType,
+      entityId,
+      matchAuditJson: seed as unknown as Prisma.InputJsonValue,
+      enrichmentStatus: "not_started",
+    },
+    update: {}, // existing rows untouched
+  });
 }
 
-async function persist(
+async function refreshStatus<K extends EntityKind>(
+  entityType: K,
+  entityId: number
+): Promise<void> {
+  await refreshStatusMirror(storeFor(entityType, entityId), async () => {
+    const a = await getEnrichmentAudit(entityType, entityId);
+    return a ? deriveOverallStatus(a) : null;
+  });
+}
+
+/**
+ * Update top-level audit fields. Used by the pipeline once at start (to stamp
+ * a fresh runId/startedAt) and at end (to stamp completedAt) — both serial,
+ * no race. For mid-flight error accumulation, use {@link appendEnrichmentError}.
+ */
+export async function updateEnrichmentAudit<K extends EntityKind>(
+  entityType: K,
+  entityId: number,
+  patch: Partial<Pick<MatchAuditJson, "runId" | "startedAt" | "completedAt" | "errors">>
+): Promise<void> {
+  await ensureRow(entityType, entityId);
+  const store = storeFor(entityType, entityId);
+  for (const [field, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    await setAuditFieldAtomic(store, field, value);
+  }
+  await refreshStatus(entityType, entityId);
+}
+
+/**
+ * Atomically merge `patch` into `audit[track]`. Safe under concurrent calls
+ * for different tracks (the whole point of this refactor).
+ */
+export async function updateEnrichmentTrack<K extends EntityKind>(
+  entityType: K,
+  entityId: number,
+  track: TrackIdFor<K>,
+  patch: Partial<TrackAudit>
+): Promise<void> {
+  await ensureRow(entityType, entityId);
+  await setTrackAtomic(storeFor(entityType, entityId), track, patch);
+  await refreshStatus(entityType, entityId);
+}
+
+/**
+ * Full-doc overwrite. Used by the migration script. Adapters should NOT call
+ * this from concurrent code paths — use updateEnrichmentTrack instead.
+ */
+export async function replaceEnrichmentAudit(
   entityType: string,
   entityId: number,
   audit: MatchAuditJson
@@ -59,54 +146,16 @@ async function persist(
   });
 }
 
-/** Patch top-level audit fields (runId, startedAt, completedAt, errors). */
-export async function updateEnrichmentAudit(
-  entityType: string,
+/**
+ * Append a single error entry. Safe under concurrent calls — both racing
+ * failures land via Postgres `||` jsonb concat.
+ */
+export async function appendEnrichmentError<K extends EntityKind>(
+  entityType: K,
   entityId: number,
-  patch: Partial<Omit<MatchAuditJson, "general" | "contact">>
+  error: { message: string; timestamp: string; track?: TrackIdFor<K> }
 ): Promise<void> {
-  const current = await readCurrent(entityType, entityId);
-  const merged: MatchAuditJson = {
-    ...current,
-    ...patch,
-    // errors: append, don't replace, unless patch explicitly contains an array
-    errors: patch.errors !== undefined ? patch.errors : current.errors,
-  };
-  await persist(entityType, entityId, merged);
-}
-
-/** Deep-merge a partial TrackAudit into one track. */
-export async function updateEnrichmentTrack(
-  entityType: string,
-  entityId: number,
-  track: TrackKind,
-  patch: Partial<TrackAudit>
-): Promise<void> {
-  const current = await readCurrent(entityType, entityId);
-  const mergedTrack: TrackAudit = { ...current[track], ...patch };
-  const merged: MatchAuditJson = { ...current, [track]: mergedTrack };
-  await persist(entityType, entityId, merged);
-}
-
-/** Replace the entire audit (used by saveTrackResult to commit final state). */
-export async function replaceEnrichmentAudit(
-  entityType: string,
-  entityId: number,
-  audit: MatchAuditJson
-): Promise<void> {
-  await persist(entityType, entityId, audit);
-}
-
-/** Append a single error entry, optionally tagged with the track that produced it. */
-export async function appendEnrichmentError(
-  entityType: string,
-  entityId: number,
-  error: { message: string; timestamp: string; track?: TrackKind }
-): Promise<void> {
-  const current = await readCurrent(entityType, entityId);
-  const merged: MatchAuditJson = {
-    ...current,
-    errors: [...(current.errors ?? []), error],
-  };
-  await persist(entityType, entityId, merged);
+  await ensureRow(entityType, entityId);
+  await appendErrorAtomic(storeFor(entityType, entityId), error);
+  await refreshStatus(entityType, entityId);
 }
