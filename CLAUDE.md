@@ -188,6 +188,7 @@ scripts/migrate-audit-schema.ts  # One-time legacy → track-split audit migrati
 | `POST /api/candidates/[id]/enrich` | Enrich a live candidate |
 | `GET /api/candidates` | List candidates with derived fields for the list table (booleans, bio length, relation counts via `_count`) |
 | `GET /api/candidates/[id]` | Fetch a single candidate with full audit + current election link |
+| `GET /api/elections` | List elections with derived fields for the list table (candidate counts, verified count, description length, region label). Read-only; no enrichment wired yet. |
 | `GET /api/logs` | API call log (Tavily + Gemini) with cost/latency |
 | `GET /api/logs/summary` | Aggregated cost/count summary |
 
@@ -212,5 +213,6 @@ All list views use the shared `DataTable` component (`src/components/DataTable.t
 /rows/[id]    Row detail: pipeline timeline, enrich buttons, collapsible audit sections
 /candidates   Candidate list (DataTable + enrichmentStatus filter chips)
 /candidates/[id]  Candidate detail: two-column tracks layout — General + Contact pipeline strips, per-track action buttons (Run Search / Run Gemini / Save / Run All), Run Full, and a 2-column artifacts grid. Errors render full-width with a track pill.
+/elections    Election list (DataTable, read-only browsing — no enrichment wired yet). Columns: id, position, cycle, date, active, candidates count, verified candidates count, description length, positions, city, state, type, region label (via ElectionMapRegionLink → ElectionMapRegion.label).
 /logs         API call log with cost breakdown (DataTable + apiType chips + server pagination)
 ```
