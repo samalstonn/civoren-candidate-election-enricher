@@ -6,7 +6,7 @@ import {
   appendEnrichmentError,
 } from "@/lib/enrichment/enrichmentRecord";
 import { buildPrompt } from "@/lib/enrichment/prompt";
-import { expandState } from "@/lib/enrichment/states";
+import { expandState, normalizeStateCode } from "@/lib/enrichment/states";
 import { isValidEmail, isValidPhone, isValidUrl } from "@/lib/enrichment/validate";
 import { getTrack, type TrackIdFor } from "@/lib/enrichment/registry";
 import type {
@@ -212,9 +212,16 @@ export class LiveCandidateAdapter implements EntityAdapter<"candidate"> {
     const { candidate, electionLink } = this;
     const finalSavedFields: Record<string, unknown> = {};
 
+    // Normalize Gemini's currentState (accepts either "CA" or "California");
+    // reject anything not in the canonical 50-states+DC list. Fall back to the
+    // election's state when the candidate has none recorded yet.
+    const normalized = parsed.currentState ? normalizeStateCode(parsed.currentState) : null;
+    if (parsed.currentState && !normalized) {
+      finalSavedFields.currentStateSkipped = `not a recognized US state: ${parsed.currentState}`;
+    }
     const stateToSave =
-      parsed.currentState && parsed.currentState.length === 2
-        ? parsed.currentState.toUpperCase()
+      normalized
+        ? normalized
         : !candidate.currentState && this.election?.state
         ? this.election.state
         : undefined;

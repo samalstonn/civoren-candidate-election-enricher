@@ -20,3 +20,23 @@ export const STATE_NAMES: Record<string, string> = {
 export function expandState(s: string): string {
   return STATE_NAMES[s.trim().toUpperCase()] ?? s;
 }
+
+/** Reverse lookup: "California" → "CA". Case-insensitive. */
+const NAME_TO_CODE: Record<string, string> = Object.fromEntries(
+  Object.entries(STATE_NAMES).map(([code, name]) => [name.toLowerCase(), code])
+);
+
+/**
+ * Normalize Gemini's `currentState` output to a valid 2-letter US postal code.
+ * Accepts either a postal code ("CA", "ca") or a full state name ("California",
+ * "california"). Returns null for anything not in the official 50-states + DC list.
+ *
+ * Defensive against Gemini ignoring the "two-letter postal code" instruction.
+ */
+export function normalizeStateCode(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase();
+  if (STATE_NAMES[upper]) return upper;
+  return NAME_TO_CODE[trimmed.toLowerCase()] ?? null;
+}
