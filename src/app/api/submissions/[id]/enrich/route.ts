@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { runEnrichmentPipeline } from "@/lib/enrichment/pipeline";
-import type { PipelineMode } from "@/lib/enrichment/pipeline";
+import type { PipelineModeFor } from "@/lib/enrichment/pipeline";
 import { CandidateIntakeAdapter } from "@/lib/enrichment/adapters/candidate-intake";
 import { runWithConcurrency } from "@/lib/concurrency";
 import { cancelRegistry } from "@/lib/cancelRegistry";
@@ -32,7 +32,7 @@ function auditStatus(matchAuditJson: unknown): string | null {
 
 // The legacy stage-resume optimization (re-run only `gemini` or `save` on a failed row)
 // doesn't translate cleanly to two parallel tracks. For v1, always retry `full`.
-function resumeMode(_enrichmentStatus: string | null, _lastAuditStatus: string | null): PipelineMode {
+function resumeMode(_enrichmentStatus: string | null, _lastAuditStatus: string | null): PipelineModeFor<"candidate"> {
   return "full";
 }
 

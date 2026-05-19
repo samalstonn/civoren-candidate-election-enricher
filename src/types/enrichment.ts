@@ -40,6 +40,21 @@ export interface ContactParsedResult {
   notes?: string;
 }
 
+export interface OverviewParsedResult {
+  description?: string;
+  /** primary | general | special | runoff. Adapter resolves the actual date from this + state. */
+  electionClassification?: "primary" | "general" | "special" | "runoff" | null;
+  /** Inferred date for special/runoff only — primary/general are resolved from the dict. */
+  date?: string | null;
+  positions?: number | null;
+  filingAuthorityName?: string | null;
+  filingAuthorityLevel?: string | null;
+  filingAuthorityType?: string | null;
+  sourceUrls?: string[];
+  confidence?: number;
+  notes?: string;
+}
+
 export interface TrackAudit {
   status: EnrichmentStatus;
   searchQuery?: string;

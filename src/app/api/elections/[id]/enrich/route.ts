@@ -1,0 +1,42 @@
+import { NextResponse } from "next/server";
+import {
+  runEnrichmentPipeline,
+  normalizePipelineMode,
+} from "@/lib/enrichment/pipeline";
+import { LiveElectionAdapter } from "@/lib/enrichment/adapters/live-election";
+
+export async function POST(
+  req: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const electionId = parseInt(id, 10);
+  if (isNaN(electionId)) {
+    return NextResponse.json({ error: "Invalid id" }, { status: 400 });
+  }
+
+  let rawMode = "full";
+  try {
+    const body = await req.json();
+    if (typeof body?.mode === "string") rawMode = body.mode;
+  } catch {
+    // no body or invalid JSON — use default
+  }
+
+  try {
+    const adapter = await LiveElectionAdapter.create(electionId);
+    const modes = normalizePipelineMode(adapter, rawMode);
+    if (modes.length === 0) {
+      return NextResponse.json({ error: `Unknown mode: ${rawMode}` }, { status: 400 });
+    }
+    for (const mode of modes) {
+      await runEnrichmentPipeline(adapter, mode);
+    }
+    return NextResponse.json({ success: true, electionId, modes });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 500 }
+    );
+  }
+}

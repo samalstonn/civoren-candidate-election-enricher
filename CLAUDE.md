@@ -12,7 +12,7 @@ After any change that affects architecture, pipeline behavior, API routes, adapt
 
 A Civoren Console internal Next.js 15 App Router console for enriching election candidate records with biographical data, contact info, and confidence scores. It connects to the parent Civoren app's PostgreSQL database (shared Prisma schema) and runs a Tavily search → Gemini AI pipeline with a full audit trail.
 
-Two entity types are supported: **CRM intake draft rows** and **live election candidates**.
+Three entity types are supported: **CRM intake draft rows**, **live election candidates**, and **elections**.
 
 ## Commands
 
@@ -70,6 +70,7 @@ The pipeline is entity-agnostic. Each adapter implements `EntityAdapter<K extend
 Implementations:
 - `LiveCandidateAdapter` (entityKind: `"candidate"`) — reads/writes `Candidate`; stores audit in the shared `EnrichmentRecord` table.
 - `CandidateIntakeAdapter` (entityKind: `"candidate"`) — reads/writes `CrmIntakeDraftRow`; stores audit inline on `matchAuditJson`.
+- `LiveElectionAdapter` (entityKind: `"election"`) — reads/writes `Election`; stores audit inline on `Election.matchAuditJson`.
 
 To add a new enrichable entity kind, register tracks + write an adapter + wire up an API route + UI page. See `docs/adding-a-new-enrichment-entity.md`.
 
@@ -101,6 +102,12 @@ It reads from the adapter:
 
 - **General track Gemini extracts**: `biography`, `currentRole`, `currentCity`, `currentState`, `party`. The general save writes those to `Candidate`, plus `party` to the candidate's current non-archived `ElectionLink`. `currentState` is normalized through `normalizeStateCode` (accepts "CA" or "California", rejects invalid 2-letter codes).
 - **Contact track Gemini extracts**: `email`, `phone`, `linkedin`, `website`. The contact save writes those to `Candidate`. Existing email/phone are preserved; URLs are format-validated.
+
+#### Field ownership (election kind)
+
+- **Overview track Gemini extracts**: `description` (instructed to include the approximate population the seat governs), `electionClassification` (`primary | general | special | runoff`), `date` (only for special/runoff — Gemini infers), `positions` (seats up for election as an integer ≥ 1), `filingAuthorityName`, `filingAuthorityLevel`, `filingAuthorityType`. The overview save writes those to `Election`.
+- **Date resolution** is dict-driven, not Gemini-driven: `src/lib/enrichment/electionDates2026.ts` holds the static 2026 primary date per state (`PRIMARY_DATES_2026`), the federal general date (`GENERAL_DATE_2026 = "2026-11-03"`), and known runoff dates. The adapter injects the state's row into the prompt as context, Gemini only classifies, and `resolveElectionDate(classification, state, inferredDate)` picks the final date: primary → dict, general → constant, special/runoff → Gemini-inferred. To update for a new cycle, edit that file.
+- **Policy**: `description` is always overwritten when Gemini returns non-empty; `date`, `positions`, and `filingAuthority*` fields are all "high-confidence overwrite or nothing" — any non-empty value Gemini returns is written when `confidence >= 0.8` and ignored otherwise (no fill-if-null carve-out; stored filing-authority values are treated as untrustworthy). Enum fields (`filingAuthorityLevel`/`Type`) are validated against the Prisma enum values and silently skipped if invalid. The prompt deliberately does **not** surface the row's stored `filingAuthority*` values so Gemini researches the agency independently and isn't anchored by bad data.
 
 #### Modes
 
@@ -189,8 +196,9 @@ scripts/migrate-audit-schema.ts  # One-time legacy → track-split audit migrati
 | `POST /api/candidates/batch-enrich` | Server-side batch enrich a list of candidate ids (`runWithConcurrency` gated by `ENRICHMENT_CONCURRENCY`). Runs to completion even if client tab closes. |
 | `GET /api/candidates` | List candidates with derived fields for the list table (booleans, bio length, relation counts via `_count`) |
 | `GET /api/candidates/[id]` | Fetch a single candidate with full audit + current election link |
-| `GET /api/elections` | List elections with derived fields for the list table (candidate counts, verified count, description length, region label). Read-only; no enrichment wired yet. |
-| `GET /api/elections/[id]` | Fetch a single election with region link + non-archived candidate links. Read-only. |
+| `GET /api/elections` | List elections with derived fields for the list table (candidate counts, verified count, description length, region label, enrichmentStatus). |
+| `GET /api/elections/[id]` | Fetch a single election with region link, non-archived candidate links, enrichmentRecord, and per-track search-query previews. |
+| `POST /api/elections/[id]/enrich` | Enrich a single election (overview track). Accepts optional `{ "mode": "..." }` body; defaults to `"full"`. |
 | `GET /api/logs` | API call log (Tavily + Gemini) with cost/latency |
 | `GET /api/logs/summary` | Aggregated cost/count summary |
 
@@ -215,7 +223,7 @@ All list views use the shared `DataTable` component (`src/components/DataTable.t
 /rows/[id]    Row detail: pipeline timeline, enrich buttons, collapsible audit sections
 /candidates   Candidate list (DataTable + enrichmentStatus filter chips)
 /candidates/[id]  Candidate detail: two-column tracks layout — General + Contact pipeline strips, per-track action buttons (Run Search / Run Gemini / Save / Run All), Run Full, and a 2-column artifacts grid. Errors render full-width with a track pill.
-/elections    Election list (DataTable, read-only browsing — no enrichment wired yet). Columns: id, position, cycle, date, active, candidates count, verified candidates count, description length, positions, city, state, type, region label (via ElectionMapRegionLink → ElectionMapRegion.label).
-/elections/[id]  Election detail (read-only): header with region label preferred over city, overview/description/region/filing-authority cards (region + authority cards conditional on data), collapsible canonical/source debug block, and an embedded DataTable of non-archived linked candidates that links back to /candidates/[id].
+/elections    Election list (DataTable + enrichmentStatus filter chips + batch "Enrich filtered" button with concurrency 3). Columns: id, position, cycle, date, active, candidates count, verified candidates count, description length, positions, city, state, type, region label.
+/elections/[id]  Election detail: header with region label preferred over city, per-track action buttons + Run Full, single Overview pipeline strip, overview/description/region/filing-authority cards (region + authority cards conditional on data), collapsible canonical/source debug block, embedded DataTable of non-archived linked candidates, and a pipeline-artifacts column for the Overview track (search query/sources/Gemini prompt+response/parsed result/saved fields).
 /logs         API call log with cost breakdown (DataTable + apiType chips + server pagination)
 ```

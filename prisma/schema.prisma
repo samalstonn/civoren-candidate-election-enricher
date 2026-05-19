@@ -52,6 +52,8 @@ model Election {
   sourceConfidence     CrmSourceConfidence      @default(MEDIUM)
   sourceCapturedAt     DateTime?
   lastNormalizedAt     DateTime?
+  matchAuditJson       Json?
+  enrichmentStatus     String?
   candidates           ElectionLink[]
   aiChatThreads        CandidateAiChatThread[]
   mapRegionLink        ElectionMapRegionLink?

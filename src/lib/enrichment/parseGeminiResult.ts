@@ -1,6 +1,7 @@
 import type {
   GeneralParsedResult,
   ContactParsedResult,
+  OverviewParsedResult,
   TrackKind,
 } from "@/types/enrichment";
 
@@ -35,6 +36,19 @@ function asStringArray(v: unknown): string[] {
 function asConfidence(v: unknown): number | undefined {
   return typeof v === "number" ? Math.min(1, Math.max(0, v)) : undefined;
 }
+function asPositiveInt(v: unknown): number | null {
+  if (typeof v !== "number" || !Number.isFinite(v)) return null;
+  const n = Math.trunc(v);
+  return n >= 1 ? n : null;
+}
+function asClassification(
+  v: unknown
+): "primary" | "general" | "special" | "runoff" | null {
+  if (typeof v !== "string") return null;
+  const s = v.trim().toLowerCase();
+  if (s === "primary" || s === "general" || s === "special" || s === "runoff") return s;
+  return null;
+}
 
 export function parseGeneralResult(rawText: string): GeneralParsedResult {
   const obj = parseJson(rawText);
@@ -63,6 +77,24 @@ export function parseContactResult(rawText: string): ContactParsedResult {
   };
 }
 
+export function parseOverviewResult(rawText: string): OverviewParsedResult {
+  const obj = parseJson(rawText);
+  return {
+    description: asString(obj.description),
+    electionClassification: asClassification(obj.electionClassification),
+    date: asStringOrNull(obj.date),
+    positions: asPositiveInt(obj.positions),
+    filingAuthorityName: asStringOrNull(obj.filingAuthorityName),
+    filingAuthorityLevel: asStringOrNull(obj.filingAuthorityLevel),
+    filingAuthorityType: asStringOrNull(obj.filingAuthorityType),
+    sourceUrls: asStringArray(obj.sourceUrls),
+    confidence: asConfidence(obj.confidence),
+    notes: asString(obj.notes),
+  };
+}
+
 export function parseTrackResult(track: TrackKind, rawText: string) {
-  return track === "general" ? parseGeneralResult(rawText) : parseContactResult(rawText);
+  if (track === "general") return parseGeneralResult(rawText);
+  if (track === "contact") return parseContactResult(rawText);
+  return parseOverviewResult(rawText);
 }

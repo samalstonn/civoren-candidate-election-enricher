@@ -1,4 +1,5 @@
 import { CANDIDATE_TRACKS } from "./candidate";
+import { ELECTION_TRACKS } from "./election";
 
 export interface TrackDefinition {
   id: string;
@@ -33,8 +34,11 @@ export const ENTITIES = {
     label: "political candidate",
     tracks: CANDIDATE_TRACKS,
   },
-  // Future:
-  // election: { id: "election", label: "election", tracks: ELECTION_TRACKS },
+  election: {
+    id: "election",
+    label: "election",
+    tracks: ELECTION_TRACKS,
+  },
 } as const satisfies Record<string, EntityKindDefinition>;
 
 export type EntityKind = keyof typeof ENTITIES;

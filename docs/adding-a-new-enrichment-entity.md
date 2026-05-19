@@ -302,5 +302,6 @@ Legacy modes (`search`, `search_general`, `search_contact`, `gemini`, `save`) st
 ## Where to read next
 
 - `docs/split-pipeline.md` — deeper coverage of the registry, the shared prompt scaffold, audit shape, and the atomic-write pattern.
-- `src/lib/enrichment/adapters/live-candidate.ts` — the most complete reference adapter.
+- `src/lib/enrichment/adapters/live-candidate.ts` — the most complete reference adapter (two parallel tracks, shared `EnrichmentRecord` audit table).
+- `src/lib/enrichment/adapters/live-election.ts` — a simpler single-track reference adapter with **inline audit** on the entity row (mirrors `CandidateIntakeAdapter`'s storage pattern but for a different entity kind). Good template when adding a new entity that owns its own audit column.
 - `src/lib/enrichment/atomicAudit.ts` — the four primitives every adapter's audit writes must go through.

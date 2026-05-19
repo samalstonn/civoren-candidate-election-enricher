@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { createColumnHelper, type ColumnDef } from "@tanstack/react-table";
 import {
   DataTable,
   boolFilter,
   numberFilter,
+  selectFilter,
   cells,
 } from "@/components/DataTable";
 
@@ -24,6 +25,7 @@ interface ElectionRow {
   state: string;
   type: string;
   regionLabel: string | null;
+  enrichmentStatus: string | null;
 }
 
 const columnHelper = createColumnHelper<ElectionRow>();
@@ -120,7 +122,7 @@ const columns: ColumnDef<ElectionRow, any>[] = [
     header: "State",
     size: 90,
     cell: (info) => cells.nullable(info.getValue()),
-    filterFn: "includesString",
+    filterFn: selectFilter,
   }),
   columnHelper.accessor("type", {
     header: "Type",
@@ -136,18 +138,25 @@ const columns: ColumnDef<ElectionRow, any>[] = [
   }),
 ];
 
+const ENRICH_CONCURRENCY = 3;
+
 export default function ElectionsPage() {
   const [elections, setElections] = useState<ElectionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filteredCount, setFilteredCount] = useState(0);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [filteredRows, setFilteredRows] = useState<ElectionRow[]>([]);
+  const [enrichProgress, setEnrichProgress] = useState<{
+    running: boolean;
+    done: number;
+    total: number;
+  }>({ running: false, done: 0, total: 0 });
 
   useEffect(() => {
     fetch("/api/elections")
       .then((r) => r.json())
       .then((data: ElectionRow[]) => {
         setElections(data);
-        setFilteredCount(data.length);
         setLoading(false);
       })
       .catch((e) => {
@@ -156,28 +165,130 @@ export default function ElectionsPage() {
       });
   }, []);
 
+  const visible = useMemo(() => {
+    if (statusFilter === "null") return elections.filter((e) => !e.enrichmentStatus);
+    if (statusFilter) return elections.filter((e) => e.enrichmentStatus === statusFilter);
+    return elections;
+  }, [elections, statusFilter]);
+
+  const handleFilteredRowsChange = useCallback((rows: ElectionRow[]) => {
+    setFilteredRows(rows);
+  }, []);
+
+  const enrichFiltered = useCallback(async () => {
+    if (enrichProgress.running) return;
+    const targets = filteredRows.filter((e) => !e.enrichmentStatus);
+    if (targets.length === 0) return;
+    setEnrichProgress({ running: true, done: 0, total: targets.length });
+    let cursor = 0;
+    let done = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const idx = cursor++;
+        const e = targets[idx];
+        try {
+          await fetch(`/api/elections/${e.id}/enrich`, { method: "POST" });
+        } catch {
+          // swallow per-election failure; status reflects failure on next load
+        }
+        done++;
+        setEnrichProgress({ running: true, done, total: targets.length });
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(ENRICH_CONCURRENCY, targets.length) }, worker)
+    );
+    setEnrichProgress({ running: false, done: 0, total: 0 });
+    const res = await fetch("/api/elections");
+    if (res.ok) setElections(await res.json());
+  }, [filteredRows, enrichProgress.running]);
+
   if (loading) return <div className="text-gray-400 text-sm">Loading...</div>;
   if (error) return <div className="text-red-500 text-sm">Error: {error}</div>;
 
+  const filteredNotEnriched = filteredRows.filter((e) => !e.enrichmentStatus).length;
+  const filteredComplete = filteredRows.filter(
+    (e) => e.enrichmentStatus === "result_saved"
+  ).length;
+  const filteredFailed = filteredRows.filter(
+    (e) => e.enrichmentStatus === "failed"
+  ).length;
+
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 113px)" }}>
-      <div className="mb-4">
-        <h1 className="text-lg font-bold text-gray-900">Elections</h1>
-        <p className="text-gray-400 text-xs mt-1">
-          {filteredCount.toLocaleString()} shown ·{" "}
-          {elections.length.toLocaleString()} total
-        </p>
+      <div className="mb-4 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-bold text-gray-900">Elections</h1>
+          <p className="text-gray-400 text-xs mt-1">
+            {filteredRows.length.toLocaleString()} shown ·{" "}
+            {elections.length.toLocaleString()} total
+          </p>
+        </div>
+        <button
+          onClick={enrichFiltered}
+          disabled={enrichProgress.running || filteredNotEnriched === 0}
+          className="text-xs px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded transition-colors"
+        >
+          {enrichProgress.running
+            ? `Enriching ${enrichProgress.done}/${enrichProgress.total}…`
+            : `Enrich filtered (${filteredNotEnriched.toLocaleString()})`}
+        </button>
+      </div>
+
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        <button
+          onClick={() => setStatusFilter(null)}
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === null
+              ? "bg-gray-800 text-white border-gray-800"
+              : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"
+          }`}
+        >
+          All ({filteredRows.length.toLocaleString()})
+        </button>
+        <button
+          onClick={() => setStatusFilter(statusFilter === "null" ? null : "null")}
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === "null"
+              ? "bg-gray-500 text-white border-gray-500"
+              : "bg-gray-50 text-gray-400 border-gray-200 hover:border-gray-400"
+          }`}
+        >
+          Not Enriched ({filteredNotEnriched.toLocaleString()})
+        </button>
+        <button
+          onClick={() =>
+            setStatusFilter(statusFilter === "result_saved" ? null : "result_saved")
+          }
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === "result_saved"
+              ? "bg-green-500 text-white border-green-500"
+              : "bg-green-50 text-green-700 border-green-200 hover:border-green-400"
+          }`}
+        >
+          Complete ({filteredComplete.toLocaleString()})
+        </button>
+        <button
+          onClick={() => setStatusFilter(statusFilter === "failed" ? null : "failed")}
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === "failed"
+              ? "bg-red-500 text-white border-red-500"
+              : "bg-red-50 text-red-600 border-red-200 hover:border-red-400"
+          }`}
+        >
+          Failed ({filteredFailed.toLocaleString()})
+        </button>
       </div>
 
       <div className="flex-1 min-h-0">
         <DataTable
-          data={elections}
+          data={visible}
           columns={columns}
           emptyMessage="No elections match the current filters."
           virtualizeRows
           estimatedRowHeight={36}
           maxHeight="100%"
-          onFilteredRowsChange={(rows) => setFilteredCount(rows.length)}
+          onFilteredRowsChange={handleFilteredRowsChange}
         />
       </div>
     </div>

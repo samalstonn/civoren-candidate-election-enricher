@@ -14,6 +14,7 @@ export async function GET() {
       city: true,
       state: true,
       type: true,
+      enrichmentStatus: true,
       _count: { select: { candidates: true } },
       candidates: { select: { candidate: { select: { verified: true } } } },
       mapRegionLink: { select: { region: { select: { label: true } } } },
@@ -35,6 +36,7 @@ export async function GET() {
     state: e.state,
     type: e.type,
     regionLabel: e.mapRegionLink?.region.label ?? null,
+    enrichmentStatus: e.enrichmentStatus,
   }));
 
   return NextResponse.json(results);

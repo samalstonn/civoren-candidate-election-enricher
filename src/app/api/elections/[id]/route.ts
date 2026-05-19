@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { LiveElectionAdapter } from "@/lib/enrichment/adapters/live-election";
+import { trackIds } from "@/lib/enrichment/registry";
 
 export async function GET(
   _req: Request,
@@ -43,6 +45,8 @@ export async function GET(
       sourceConfidence: true,
       sourceCapturedAt: true,
       lastNormalizedAt: true,
+      matchAuditJson: true,
+      enrichmentStatus: true,
       mapRegionLink: {
         select: {
           region: {
@@ -86,8 +90,21 @@ export async function GET(
     return NextResponse.json({ error: "Election not found" }, { status: 404 });
   }
 
+  // Search-query preview per track so the UI can show queries before any run.
+  let previewQueries: Record<string, string> = {};
+  try {
+    const adapter = await LiveElectionAdapter.create(electionId);
+    for (const id of trackIds("election")) {
+      previewQueries[id] = adapter.tracks[id].buildSearchQuery();
+    }
+  } catch {
+    previewQueries = {};
+  }
+
+  const { matchAuditJson, enrichmentStatus, ...rest } = election;
+
   return NextResponse.json({
-    ...election,
+    ...rest,
     date: election.date.toISOString(),
     createdAt: election.createdAt.toISOString(),
     updatedAt: election.updatedAt.toISOString(),
@@ -99,5 +116,11 @@ export async function GET(
       votinglink: l.votinglink,
       candidate: l.candidate,
     })),
+    enrichmentRecord: {
+      enrichmentStatus: enrichmentStatus ?? null,
+      matchAuditJson: matchAuditJson ?? null,
+      updatedAt: election.updatedAt.toISOString(),
+    },
+    previewQueries,
   });
 }
