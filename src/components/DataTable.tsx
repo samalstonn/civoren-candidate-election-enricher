@@ -6,6 +6,7 @@ import {
   getCoreRowModel,
   getSortedRowModel,
   getFilteredRowModel,
+  getFacetedRowModel,
   flexRender,
   type ColumnDef,
   type ColumnFiltersState,
@@ -19,6 +20,14 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 // autoRemove ignores undefined but keeps `false` as a valid filter value.
 // The `as const` preserves the literal type so the header can sentinel-check it.
 export const boolFilter = "equals" as const;
+
+// Sentinel for "exact-match dropdown" columns. The header renders a <select>
+// populated from the column's distinct values; matching uses strict equality
+// against the chosen option (or no filter when blank).
+export const selectFilter: FilterFn<any> = (row, columnId, value) => {
+  if (value === undefined || value === null || value === "") return true;
+  return row.getValue(columnId) === value;
+};
 
 // TanStack has no built-in for `>N` / `<=N` comparator parsing
 // (only `inNumberRange`, which takes a `[min, max]` tuple), so this stays custom.
@@ -80,6 +89,39 @@ export function DebouncedInput({
       placeholder={placeholder}
       className={className}
     />
+  );
+}
+
+export function SelectFilter({
+  column,
+  value,
+  onChange,
+}: {
+  column: { getFacetedRowModel: () => { rows: { getValue: (id: string) => unknown }[] }; id: string };
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const rows = column.getFacetedRowModel().rows;
+  const distinct = new Set<string>();
+  for (const r of rows) {
+    const v = r.getValue(column.id);
+    if (v == null || v === "") continue;
+    distinct.add(String(v));
+  }
+  const options = Array.from(distinct).sort((a, b) => a.localeCompare(b));
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="px-1 py-0.5 text-[10px] border border-gray-200 rounded w-full font-normal focus:outline-none focus:border-gray-400 bg-white"
+    >
+      <option value="">all</option>
+      {options.map((opt) => (
+        <option key={opt} value={opt}>
+          {opt}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -208,6 +250,7 @@ export function DataTable<T>({
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
+    getFacetedRowModel: getFacetedRowModel(),
     enableColumnResizing: true,
     columnResizeMode: "onChange",
   });
@@ -375,6 +418,14 @@ function TableBody<T>({
                       <BoolFilterPill
                         value={filterVal as boolean | undefined}
                         onChange={(v) => header.column.setFilterValue(v)}
+                      />
+                    ) : filterFn === selectFilter ? (
+                      <SelectFilter
+                        column={header.column}
+                        value={(filterVal as string) ?? ""}
+                        onChange={(v) =>
+                          header.column.setFilterValue(v || undefined)
+                        }
                       />
                     ) : (
                       <DebouncedInput

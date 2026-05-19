@@ -25,6 +25,7 @@ const columns: ColumnDef<MyRow, any>[] = [
 |---|---|
 | `boolFilter` | Alias for TanStack's built-in `"equals"`. Pair with `cells.bool` and the header auto-renders a tri-state ✓/✗/• pill. Strict `===`; `autoRemove` treats `undefined` as "no filter" but keeps `false` as a valid match. |
 | `numberFilter` | Custom `FilterFn` for numeric columns — accepts `>5`, `<=10`, `=3`, or a substring. TanStack's built-in `"inNumberRange"` only handles `[min, max]` tuples, so this is hand-rolled. |
+| `selectFilter` | Exact-match `FilterFn` for low-cardinality string columns (e.g. state). The header renders a `<select>` populated from the column's distinct values via `getFacetedRowModel`; blank option means "no filter". |
 | `"includesString"` (built-in) | TanStack's default string filter. Use as the literal string `"includesString"`. |
 | `DebouncedInput` | 200ms-debounced text input. Used internally by header filter cells and global search; export available for custom toolbars. |
 | `BoolFilterPill` | Tri-state pill component. Used internally for boolean filter UI. |

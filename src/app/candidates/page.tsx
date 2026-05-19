@@ -7,6 +7,7 @@ import {
   DataTable,
   boolFilter,
   numberFilter,
+  selectFilter,
   cells,
 } from "@/components/DataTable";
 
@@ -155,7 +156,7 @@ const columns: ColumnDef<CandidateRow, any>[] = [
     header: "State",
     size: 110,
     cell: (info) => cells.nullable(info.getValue()),
-    filterFn: "includesString",
+    filterFn: selectFilter,
   }),
   columnHelper.accessor("inInstantly", {
     header: "Instantly",
