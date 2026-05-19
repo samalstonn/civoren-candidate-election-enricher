@@ -10,6 +10,6 @@ export async function POST(
   if (isNaN(submissionId)) {
     return NextResponse.json({ error: "Invalid id" }, { status: 400 });
   }
-  cancelRegistry.add(submissionId);
+  cancelRegistry.add(`submission:${submissionId}`);
   return NextResponse.json({ ok: true });
 }

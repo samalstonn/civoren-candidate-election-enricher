@@ -88,13 +88,13 @@ export async function POST(
     return NextResponse.json({ message: "No eligible rows to enrich", count: 0 });
   }
 
-  cancelRegistry.delete(submissionId);
+  cancelRegistry.delete(`submission:${submissionId}`);
 
   let settled: Awaited<ReturnType<typeof runWithConcurrency>>;
   try {
     settled = await runWithConcurrency(
       rows.map((row: (typeof rows)[number]) => async () => {
-        if (cancelRegistry.has(submissionId)) return row.id;
+        if (cancelRegistry.has(`submission:${submissionId}`)) return row.id;
         const mode = resumeMode(row.enrichmentStatus, auditStatus(row.matchAuditJson));
         const adapter = await CandidateIntakeAdapter.create(row.id);
         await runEnrichmentPipeline(adapter, mode);
@@ -103,7 +103,7 @@ export async function POST(
       CONCURRENCY
     );
   } finally {
-    cancelRegistry.delete(submissionId);
+    cancelRegistry.delete(`submission:${submissionId}`);
   }
 
   const results = settled!.map((r, i) => ({

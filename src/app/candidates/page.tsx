@@ -197,25 +197,30 @@ const columns: ColumnDef<CandidateRow, any>[] = [
   }),
 ];
 
-const ENRICH_CONCURRENCY = 3;
-
 export default function CandidatesPage() {
   const [candidates, setCandidates] = useState<CandidateRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string | null>(null);
   const [filteredRows, setFilteredRows] = useState<CandidateRow[]>([]);
-  const [enrichProgress, setEnrichProgress] = useState<{
-    running: boolean;
-    done: number;
-    total: number;
-  }>({ running: false, done: 0, total: 0 });
+  const [serverBatch, setServerBatch] = useState<{ running: boolean; total: number }>({
+    running: false,
+    total: 0,
+  });
+  const [localFetchInFlight, setLocalFetchInFlight] = useState(false);
+  const isRunning = serverBatch.running || localFetchInFlight;
+  const runningTotal = serverBatch.total;
 
   useEffect(() => {
-    fetch("/api/candidates")
-      .then((r) => r.json())
-      .then((data) => {
+    Promise.all([
+      fetch("/api/candidates").then((r) => r.json()),
+      fetch("/api/candidates/batch-enrich/status").then((r) => r.json()),
+    ])
+      .then(([data, status]) => {
         setCandidates(data);
+        if (status?.running) {
+          setServerBatch({ running: true, total: status.total ?? 0 });
+        }
         setLoading(false);
       })
       .catch((e) => {
@@ -224,11 +229,50 @@ export default function CandidatesPage() {
       });
   }, []);
 
+  // Poll while a batch is active so the table updates live and the cancel
+  // button stays visible across reloads. Polls whenever the client thinks a
+  // request is in flight OR the server reports an active batch.
+  useEffect(() => {
+    if (!isRunning) return;
+    const interval = setInterval(async () => {
+      try {
+        const [data, status] = await Promise.all([
+          fetch("/api/candidates").then((r) => r.json()),
+          fetch("/api/candidates/batch-enrich/status").then((r) => r.json()),
+        ]);
+        setCandidates(data);
+        setServerBatch({
+          running: Boolean(status?.running),
+          total: status?.total ?? 0,
+        });
+      } catch {
+        // ignore transient errors
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [isRunning]);
+
+  const isPending = (c: CandidateRow) =>
+    Boolean(c.enrichmentStatus) &&
+    c.enrichmentStatus !== "result_saved" &&
+    c.enrichmentStatus !== "failed";
+
   const visible = useMemo(() => {
-    if (statusFilter === "null") return candidates.filter((c) => !c.enrichmentStatus);
-    if (statusFilter)
-      return candidates.filter((c) => c.enrichmentStatus === statusFilter);
-    return candidates;
+    const filtered =
+      statusFilter === "null"
+        ? candidates.filter((c) => !c.enrichmentStatus)
+        : statusFilter === "pending"
+          ? candidates.filter(isPending)
+          : statusFilter
+            ? candidates.filter((c) => c.enrichmentStatus === statusFilter)
+            : candidates;
+    // Not-yet-enriched first, then pending, then completed/failed (id desc preserved within group).
+    const rank = (c: CandidateRow) => {
+      if (!c.enrichmentStatus) return 0;
+      if (isPending(c)) return 1;
+      return 2;
+    };
+    return [...filtered].sort((a, b) => rank(a) - rank(b));
   }, [candidates, statusFilter]);
 
   const handleFilteredRowsChange = useCallback((rows: CandidateRow[]) => {
@@ -236,41 +280,49 @@ export default function CandidatesPage() {
   }, []);
 
   const enrichFiltered = useCallback(async () => {
-    if (enrichProgress.running) return;
-    const targets = filteredRows.filter((c) => !c.enrichmentStatus);
-    if (targets.length === 0) return;
-    setEnrichProgress({ running: true, done: 0, total: targets.length });
-    let cursor = 0;
-    let done = 0;
-    const worker = async () => {
-      while (cursor < targets.length) {
-        const idx = cursor++;
-        const c = targets[idx];
-        try {
-          await fetch(`/api/candidates/${c.id}/enrich`, { method: "POST" });
-        } catch {
-          // swallow per-candidate failure; status will reflect failure on next load
-        }
-        done++;
-        setEnrichProgress({ running: true, done, total: targets.length });
-      }
-    };
-    await Promise.all(
-      Array.from({ length: Math.min(ENRICH_CONCURRENCY, targets.length) }, worker)
+    if (isRunning) return;
+    const targets = filteredRows.filter(
+      (c) => c.enrichmentStatus !== "result_saved"
     );
-    setEnrichProgress({ running: false, done: 0, total: 0 });
-    const res = await fetch("/api/candidates");
-    if (res.ok) setCandidates(await res.json());
-  }, [filteredRows, enrichProgress.running]);
+    if (targets.length === 0) return;
+    setLocalFetchInFlight(true);
+    setServerBatch({ running: true, total: targets.length });
+    try {
+      await fetch("/api/candidates/batch-enrich", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ candidateIds: targets.map((c) => c.id) }),
+      });
+    } finally {
+      setLocalFetchInFlight(false);
+      const [data, status] = await Promise.all([
+        fetch("/api/candidates").then((r) => r.json()),
+        fetch("/api/candidates/batch-enrich/status").then((r) => r.json()),
+      ]);
+      setCandidates(data);
+      setServerBatch({
+        running: Boolean(status?.running),
+        total: status?.total ?? 0,
+      });
+    }
+  }, [filteredRows, isRunning]);
+
+  const cancelEnrich = useCallback(async () => {
+    await fetch("/api/candidates/batch-enrich/cancel", { method: "POST" });
+  }, []);
 
   if (loading) return <div className="text-gray-400 text-sm">Loading...</div>;
   if (error) return <div className="text-red-500 text-sm">Error: {error}</div>;
 
   // Counts within the post-table-filter set so chips reflect what the user sees.
   const filteredNotEnriched = filteredRows.filter((c) => !c.enrichmentStatus).length;
+  const filteredEligible = filteredRows.filter(
+    (c) => c.enrichmentStatus !== "result_saved"
+  ).length;
   const filteredComplete = filteredRows.filter(
     (c) => c.enrichmentStatus === "result_saved"
   ).length;
+  const filteredPending = filteredRows.filter(isPending).length;
   const filteredFailed = filteredRows.filter(
     (c) => c.enrichmentStatus === "failed"
   ).length;
@@ -287,15 +339,25 @@ export default function CandidatesPage() {
             {filteredRows.length.toLocaleString()} shown · {candidates.length.toLocaleString()} total
           </p>
         </div>
-        <button
-          onClick={enrichFiltered}
-          disabled={enrichProgress.running || filteredNotEnriched === 0}
-          className="text-xs px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded transition-colors"
-        >
-          {enrichProgress.running
-            ? `Enriching ${enrichProgress.done}/${enrichProgress.total}…`
-            : `Enrich filtered (${filteredNotEnriched.toLocaleString()})`}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={enrichFiltered}
+            disabled={isRunning || filteredEligible === 0}
+            className="text-xs px-3 py-2 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-bold rounded transition-colors"
+          >
+            {isRunning
+              ? `Enriching ${runningTotal || ""}…`
+              : `Enrich filtered (${filteredEligible.toLocaleString()})`}
+          </button>
+          {isRunning && (
+            <button
+              onClick={cancelEnrich}
+              className="text-xs px-3 py-2 bg-red-500 hover:bg-red-400 text-white font-bold rounded transition-colors"
+            >
+              Cancel
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5 mb-3">
@@ -330,6 +392,16 @@ export default function CandidatesPage() {
           }`}
         >
           Complete ({filteredComplete.toLocaleString()})
+        </button>
+        <button
+          onClick={() => setStatusFilter(statusFilter === "pending" ? null : "pending")}
+          className={`px-2.5 py-1 rounded text-xs font-medium border transition-colors ${
+            statusFilter === "pending"
+              ? "bg-blue-500 text-white border-blue-500"
+              : "bg-blue-50 text-blue-700 border-blue-200 hover:border-blue-400"
+          }`}
+        >
+          Pending ({filteredPending.toLocaleString()})
         </button>
         <button
           onClick={() => setStatusFilter(statusFilter === "failed" ? null : "failed")}

@@ -186,6 +186,7 @@ scripts/migrate-audit-schema.ts  # One-time legacy → track-split audit migrati
 | `POST /api/submissions/[id]/enrich` | Batch enrich all not-started rows in a submission |
 | `POST /api/submissions/[id]/cancel` | Cancel in-flight batch enrichment |
 | `POST /api/candidates/[id]/enrich` | Enrich a live candidate |
+| `POST /api/candidates/batch-enrich` | Server-side batch enrich a list of candidate ids (`runWithConcurrency` gated by `ENRICHMENT_CONCURRENCY`). Runs to completion even if client tab closes. |
 | `GET /api/candidates` | List candidates with derived fields for the list table (booleans, bio length, relation counts via `_count`) |
 | `GET /api/candidates/[id]` | Fetch a single candidate with full audit + current election link |
 | `GET /api/elections` | List elections with derived fields for the list table (candidate counts, verified count, description length, region label). Read-only; no enrichment wired yet. |
