@@ -43,7 +43,18 @@ ENRICHMENT_CONCURRENCY=5         # Batch concurrency limit
 GEMINI_INPUT_COST_PER_1M_TOKENS=
 GEMINI_OUTPUT_COST_PER_1M_TOKENS=
 TAVILY_COST_PER_CALL=
+
+AUTH_SECRET=                     # Auth.js session signing key (openssl rand -base64 33)
+AUTH_GOOGLE_ID=                  # Google OAuth client ID
+AUTH_GOOGLE_SECRET=              # Google OAuth client secret
+ALLOWED_AUTH_DOMAINS=civoren.com # Optional; comma-separated Workspace domains allowed to sign in
+AUTH_URL=                        # Canonical app URL in prod (OAuth redirect base behind a proxy)
+AUTH_TRUST_HOST=true             # Required on Railway / non-Vercel hosts
 ```
+
+## Authentication
+
+The entire console is gated behind Google Workspace SSO, restricted to the `civoren.com` domain, via Auth.js (NextAuth v5). `src/middleware.ts` exports `auth` as the middleware and protects every route except `api/auth/*` and static assets. The domain rule is enforced server-side in the `signIn` and `authorized` callbacks in `src/auth.ts` (the Google `hd` param is only a UX hint, not a security boundary). See `docs/authentication.md` for setup, env vars, and the Google Cloud OAuth client configuration.
 
 ## Architecture
 
